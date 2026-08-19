@@ -5,14 +5,17 @@ import Foundation
 /// - 数据源：`~/.workbuddy/projects/<project>/<sessionId>.jsonl`
 /// - 积分流水：`~/.workbuddy/logs/<date>/*.log` 中的
 ///   `AcpUsagePublisher credit consumed` 记录
-/// - 只统计 `type == message && role == assistant` 的
-///   `providerData.rawUsage`
-/// - `prompt_tokens` 已包含缓存命中；净输入要减去
-///   `prompt_cache_hit_tokens`
+/// - 统计每条包含 `providerData.rawUsage` 的模型调用记录。WorkBuddy 把
+///   大多数调用写成 `type == function_call`，最后一条流式结果才可能是
+///   `type == message && role == assistant`；两者都属于一次真实调用。
+/// - `prompt_tokens` 是包含缓存命中的完整 prompt 总量，和 WorkBuddy
+///   用量页的“输入 Token”口径一致；缓存命中单独保留用于命中率和计费。
 /// - `credit` 是 WorkBuddy 自带的内部积分；金额则按模型对应的本地
 ///   Tokei/OpenRouter 价格表，对 Token 做独立的美元成本估算
 enum WorkBuddyUsageScanner {
-    private static let cacheVersion = 3
+    // Version 4 includes function_call rawUsage records and keeps WorkBuddy's
+    // inclusive prompt total in TokenBreakdown.input.
+    private static let cacheVersion = 4
     private static let cacheURL = AppPaths.appSupport.appendingPathComponent("workbuddy-scan-cache.json")
 
     private struct Event {
@@ -69,7 +72,8 @@ enum WorkBuddyUsageScanner {
                     total: total,
                     cacheRead: cacheRead,
                     cacheWrite: cacheWrite,
-                    reasoning: reasoning
+                    reasoning: reasoning,
+                    inputIncludesCache: true
                 ),
                 credits: credits,
                 cost: cost,
@@ -260,9 +264,7 @@ enum WorkBuddyUsageScanner {
     }
 
     private static func parseEvent(_ object: [String: Any], lineNumber: Int) -> Event? {
-        guard LocalData.string(object["type"]) == "message",
-              LocalData.string(object["role"]) == "assistant",
-              let sessionID = nonemptyString(object["sessionId"]),
+        guard let sessionID = nonemptyString(object["sessionId"]),
               let providerData = object["providerData"] as? [String: Any],
               let rawUsage = providerData["rawUsage"] as? [String: Any],
               let timestamp = LocalData.date(object["timestamp"]) else { return nil }
@@ -271,9 +273,10 @@ enum WorkBuddyUsageScanner {
         let completion = max(LocalData.number(rawUsage["completion_tokens"]) ?? 0, 0)
         guard prompt + completion > 0 else { return nil }
 
-        // Tokei confirms that WorkBuddy's prompt_tokens is normally the
-        // inclusive prompt total. Keep the total_tokens check as a guard for
-        // older records where prompt_tokens was already the uncached amount.
+        // Tokei confirms that current WorkBuddy records use prompt_tokens as
+        // the inclusive prompt total. Keep a compatibility fallback for old
+        // records that stored only uncached input while total_tokens exposed
+        // the full prompt plus completion total.
         let rawCachedHit = max(
             max(LocalData.number(rawUsage["prompt_cache_hit_tokens"]) ?? 0, 0),
             0
@@ -287,24 +290,27 @@ enum WorkBuddyUsageScanner {
         )
         let cachedHit = min(rawCachedHit, prompt)
         let totalTokens = LocalData.number(rawUsage["total_tokens"])
-        let inclusiveInput = totalTokens.map {
+        let promptIncludesCache = totalTokens.map {
             abs($0 - (prompt + completion)) < 0.5
         } ?? true
-        let cacheWrite = min(rawCacheWrite, max(prompt - cachedHit, 0))
-        let input = inclusiveInput
-            ? max(prompt - cachedHit - cacheWrite, 0)
-            : prompt
+        let cacheWrite = promptIncludesCache
+            ? min(rawCacheWrite, max(prompt - cachedHit, 0))
+            : max(rawCacheWrite, 0)
+        let promptTotal = promptIncludesCache
+            ? prompt
+            : prompt + cachedHit + cacheWrite
         let thinking = min(
             max(LocalData.number(rawUsage["completion_thinking_tokens"]) ?? 0, 0),
             completion
         )
         let tokens = TokenBreakdown(
-            input: input,
+            input: promptTotal,
             output: completion,
-            total: input + completion + cachedHit + cacheWrite,
+            total: max(totalTokens ?? 0, promptTotal + completion),
             cacheRead: cachedHit,
             cacheWrite: cacheWrite,
-            reasoning: thinking
+            reasoning: thinking,
+            inputIncludesCache: true
         )
         let credits = max(LocalData.number(rawUsage["credit"]) ?? 0, 0)
         let model = providerModel(in: providerData)
@@ -406,7 +412,7 @@ enum WorkBuddyUsageScanner {
         guard tokens.hasTokens else { return 0 }
         return CodexPricing.estimatedCost(
             model: model,
-            inputTokens: tokens.input + tokens.cacheRead + tokens.cacheWrite,
+            inputTokens: tokens.input,
             cachedInputTokens: tokens.cacheRead,
             outputTokens: tokens.output,
             cacheWriteTokens: tokens.cacheWrite

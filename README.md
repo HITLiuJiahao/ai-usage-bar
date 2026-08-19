@@ -24,7 +24,7 @@ AI Usage Bar 是一个面向 macOS 的本地优先菜单栏应用，用来集中
 | --- | --- | --- | --- |
 | Codex | `~/.codex/sessions`、`~/.codex/archived_sessions` | ChatGPT 后端 `wham/usage` 订阅窗口 | Token、请求、模型、输入/输出/缓存、成本估算、5 小时/周额度 |
 | 千问办公 | `~/.qwenworkcn/projects` 和兼容日志目录中的 JSONL | QwenWork `account-context` | 请求、会话、活跃时长、模型、订阅/加购/共享 Credits |
-| WorkBuddy | `~/.workbuddy/projects` JSONL 和 `~/.workbuddy/logs` 积分流水 | 本机账户信息 | Token、输入/输出、缓存命中、推理、Credits、模型、请求和成本估算 |
+| WorkBuddy | `~/.workbuddy/projects` JSONL 和 `~/.workbuddy/logs` 积分流水 | 本机账户信息 | Token、输入/输出、缓存命中、推理、Credits、模型、请求和成本估算；JSONL 中每条 `providerData.rawUsage`（包括 `function_call`）计为一次模型调用 |
 | DeepSeek Harness | `~/.dsh/sessions` 中的 `.jsonl.zstd`，或 Tokei 缓存 | — | Token、输入/输出、缓存读写、推理、请求、模型、人民币成本 |
 | TraeWork CN | Trae CN SQLCipher 数据库及本机兼容日志 | Trae CN 套餐/额度接口 | Token、请求、模型、Credits/额度和服务端状态 |
 | MiniMax Code | `~/.minimax/v2/sqlite/runtime-state.sqlite` 及兼容日志 | MiniMax coding plan 接口 | Token、输入/输出、缓存读写、推理、请求、模型、成本和 5 小时/周额度 |
@@ -67,6 +67,7 @@ AI Usage Bar 是一个面向 macOS 的本地优先菜单栏应用，用来集中
 - Codex Auto Review 映射到 `GPT-5.3-Codex` 价格。
 - DeepSeek Harness 按 DeepSeek 官方人民币峰谷价格和北京时间计算，仪表盘显示 `¥`。
 - WorkBuddy 会根据实际日志中的模型名匹配 Kimi/Hy 系列价格，并优先使用本机 Tokei 价格表。
+- WorkBuddy 的“输入”采用 `prompt_tokens` 完整 prompt 总量，缓存命中率为 `prompt_cache_hit_tokens / prompt_tokens`；缓存命中不再重复加到输入或成本中。
 - MiniMax Code 使用本地模型用量与 MiniMax 官方 Token 价格估算；Token Plan 的实际扣减以 MiniMax 服务端额度为准。
 - QwenWork、TraeWork CN 的 Credits/套餐额度保留原始单位，不把订阅积分冒充 API 成本。
 
