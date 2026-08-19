@@ -1,0 +1,6 @@
+.build/
+.build-module-cache/
+dist/
+.swiftpm/
+outputs/
+.DS_Store
