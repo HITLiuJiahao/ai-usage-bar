@@ -1,5 +1,7 @@
 # AI Usage Bar
 
+![AI Usage Bar dashboard](assets/dashboard.png)
+
 AI Usage Bar is a local-first macOS menu bar application for viewing usage, subscription quotas, balances, and estimated costs from multiple AI coding tools in one place.
 
 The app does not require a separate cloud backend. It primarily reads session files, logs, and databases left by local clients. When official subscription quotas, account balances, or server-side usage windows are needed, it uses the credentials already available on the Mac to call the corresponding official APIs.
