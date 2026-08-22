@@ -4,30 +4,29 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     case codex
     case chatGPT
     case qwenWork
+    case qianwenOffice
     case deepSeekHarness
     case workBuddy
     case miniMax
-    case traeWork
 
     var id: String { rawValue }
 
-    // Keep the older identifiers decodable for existing account settings while
-    // keeping the dashboard order stable for the two-column layout.
+    // Keep the dashboard order stable for the two-column layout.
     static let trackedCases: [ProviderID] = [
-        .codex, .qwenWork,
+        .codex, .qwenWork, .qianwenOffice,
         .workBuddy, .deepSeekHarness,
-        .traeWork, .miniMax
+        .miniMax
     ]
 
     var displayName: String {
         switch self {
         case .codex: return "Codex"
         case .chatGPT: return "ChatGPT"
-        case .qwenWork: return "千问办公"
+        case .qwenWork: return "QwenWork"
+        case .qianwenOffice: return "千问办公模式"
         case .deepSeekHarness: return "DeepSeek Harness"
         case .workBuddy: return "WorkBuddy"
         case .miniMax: return "MiniMax Code"
-        case .traeWork: return "TraeWork CN"
         }
     }
 
@@ -36,10 +35,10 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .codex: return "Codex"
         case .chatGPT: return "ChatGPT"
         case .qwenWork: return "QwenWork"
+        case .qianwenOffice: return "Qwen Office"
         case .deepSeekHarness: return "DeepSeek"
         case .workBuddy: return "WorkBuddy"
         case .miniMax: return "MiniMax"
-        case .traeWork: return "TraeWork"
         }
     }
 
@@ -48,10 +47,10 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .codex: return "terminal"
         case .chatGPT: return "bubble.left.and.bubble.right"
         case .qwenWork: return "sparkles"
+        case .qianwenOffice: return "briefcase.fill"
         case .deepSeekHarness: return "brain.head.profile"
         case .workBuddy: return "person.2.wave.2"
         case .miniMax: return "hexagon"
-        case .traeWork: return "bolt.horizontal.circle"
         }
     }
 }
