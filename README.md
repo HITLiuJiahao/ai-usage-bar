@@ -10,7 +10,7 @@ The app does not require a separate cloud backend. It primarily reads session fi
 
 ## Download
 
-Download the latest Apple Silicon (`arm64`) application from the [GitHub Releases page](https://github.com/HITLiuJiahao/ai-usage-bar/releases/latest). Unzip the download, move `AIUsageBar.app` to the Applications folder, and open it by right-clicking **Open** the first time if macOS asks for confirmation.
+Download the latest Apple Silicon (`arm64`) ZIP directly: [AIUsageBar-arm64-release-20260822.zip](https://raw.githubusercontent.com/HITLiuJiahao/ai-usage-bar/3d7cadcca3c6741000e950cf5712e1a44d0a0207/dist/AIUsageBar-arm64-release-20260822.zip). Unzip the download, move `AIUsageBar.app` to the Applications folder, and open it by right-clicking **Open** the first time if macOS asks for confirmation.
 
 ## Features
 
