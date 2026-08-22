@@ -585,7 +585,8 @@ enum UsageMetrics {
                     outputTokens: bucket.tokens.output,
                     cacheReadTokens: bucket.tokens.cacheRead,
                     cacheWriteTokens: bucket.tokens.cacheWrite,
-                    reasoningTokens: bucket.tokens.reasoning
+                    reasoningTokens: bucket.tokens.reasoning,
+                    inputIncludesCache: bucket.tokens.inputIncludesCache
                 ))
                 if bucket.tokens.input > 0 || bucket.tokens.output > 0 {
                     metrics.append(UsageMetric(
@@ -604,7 +605,8 @@ enum UsageMetrics {
                         outputTokens: bucket.tokens.output,
                         cacheReadTokens: bucket.tokens.cacheRead,
                         cacheWriteTokens: bucket.tokens.cacheWrite,
-                        reasoningTokens: bucket.tokens.reasoning
+                        reasoningTokens: bucket.tokens.reasoning,
+                        inputIncludesCache: bucket.tokens.inputIncludesCache
                     ))
                 }
                 if bucket.tokens.cacheRead > 0 {
