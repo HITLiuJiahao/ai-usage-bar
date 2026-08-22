@@ -308,10 +308,10 @@ enum ProviderPalette {
         case .codex: return .green
         case .chatGPT: return .teal
         case .qwenWork: return .blue
+        case .qianwenOffice: return .cyan
         case .deepSeekHarness: return .pink
         case .workBuddy: return .indigo
         case .miniMax: return .purple
-        case .traeWork: return .orange
         }
     }
 }
@@ -409,7 +409,7 @@ struct AccountSettingsView: View {
             } header: {
                 Text("添加服务端账户")
             } footer: {
-                Text("Codex 当前登录态会自动读取；千问办公的订阅 Credits 来自官方账户接口，本地日志补充请求和模型明细。需要读取官方额度时，可将 Access Token 保存到 macOS 钥匙串。")
+                Text("Codex 当前登录态会自动读取；QwenWork 的订阅 Credits 来自官方账户接口，本地日志补充请求和模型明细。需要读取官方额度时，可将 Access Token 保存到 macOS 钥匙串。")
             }
         }
         .formStyle(.grouped)
