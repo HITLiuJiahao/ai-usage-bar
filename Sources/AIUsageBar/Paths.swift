@@ -26,6 +26,15 @@ enum AppPaths {
         .appendingPathComponent("Library", isDirectory: true)
         .appendingPathComponent("Application Support", isDirectory: true)
         .appendingPathComponent("QwenWorkCN", isDirectory: true)
+    /// The consumer Qianwen desktop app keeps its agent sessions separately
+    /// from QwenWorkCN.  Its office mode writes one event stream per thread
+    /// below `qwen-agent/<account>/projects/.../sessions/...`.
+    static let qianwenDesktopSupport = home
+        .appendingPathComponent("Library", isDirectory: true)
+        .appendingPathComponent("Application Support", isDirectory: true)
+        .appendingPathComponent("Qianwen", isDirectory: true)
+    static let qianwenAgentRoot = qianwenDesktopSupport
+        .appendingPathComponent("qwen-agent", isDirectory: true)
     static let qwenWorkRoot = home.appendingPathComponent(".qwenworkcn", isDirectory: true)
     /// QwenWorkCN stores one JSONL transcript per session below this folder.
     /// The layout is `projects/<workspace>/<session>.jsonl`; sub-agent
@@ -64,42 +73,6 @@ enum AppPaths {
     static let miniMaxSessions = miniMaxRoot
         .appendingPathComponent("v2", isDirectory: true)
         .appendingPathComponent("sessions", isDirectory: true)
-
-    /// TRAE Work desktop builds use these two Electron application-support
-    /// roots.  `TRAE SOLO CN` is the CN build name used by current releases;
-    /// `TRAE SOLO` is kept for older/current international-branded builds.
-    static let traeWorkSupportCandidates = [
-        home
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("TRAE SOLO CN", isDirectory: true),
-        home
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("TRAE SOLO", isDirectory: true),
-    ]
-
-    static let traeChinaSupportCandidates = [
-        home
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("Trae CN", isDirectory: true)
-    ]
-
-    /// Kept as a combined list for compatibility with older local readers.
-    static let traeSupportCandidates = traeWorkSupportCandidates + traeChinaSupportCandidates
-
-    /// Trae's local usage ledger. `TRAE SOLO CN` is the current TraeWork CN
-    /// application-support root; the standalone `Trae CN` root is kept for
-    /// older installs. Keep CN roots ahead of the international root because
-    /// the same machine can have both clients installed.
-    static let traeDatabaseCandidates = [
-        traeWorkSupportCandidates[0],
-        traeChinaSupportCandidates[0],
-        traeWorkSupportCandidates[1]
-    ].map {
-        $0.appendingPathComponent("ModularData/ai-agent/database.db")
-    }
 
     static let codexAuthCandidates = [
         codexRoot.appendingPathComponent("auth.json"),
