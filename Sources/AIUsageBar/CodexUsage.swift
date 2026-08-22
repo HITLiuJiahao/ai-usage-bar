@@ -63,7 +63,15 @@ enum CodexPricing {
         // present, is loaded afterwards and takes precedence over these.
         "moonshotai/kimi-k3": Price(input: 3.0, output: 15.0, cacheRead: 0.30),
         "tencent/hy3": Price(input: 0.132, output: 0.528, cacheRead: 0.033),
-        "tencent/hy3-preview": Price(input: 0.18, output: 0.60, cacheRead: 0.06)
+        "tencent/hy3-preview": Price(input: 0.18, output: 0.60, cacheRead: 0.06),
+        // Qianwen Office Mode reports provider token counts, but not the
+        // subscription's Credits deduction. These public USD-equivalent
+        // list rates are therefore comparison estimates, not official bills.
+        "qwen3.8-max": Price(input: 2.0, output: 6.0, cacheRead: 0.25, cacheWrite: 2.50),
+        "qwen3.8-max-preview": Price(input: 2.0, output: 6.0, cacheRead: 0.25, cacheWrite: 2.50),
+        "deepseek-v4-flash": Price(input: 0.14, output: 0.28, cacheRead: 0.0028),
+        "deepseek-v4-flash-0731": Price(input: 0.14, output: 0.28, cacheRead: 0.0028),
+        "glm-5.2": Price(input: 1.40, output: 4.40, cacheRead: 0.26)
     ]
 
     private static let pricingStore: (models: [String: Price], aliases: [String: String]) = {
@@ -83,7 +91,13 @@ enum CodexPricing {
             "kimi-k3": "moonshotai/kimi-k3",
             "kimi-k3-1": "moonshotai/kimi-k3",
             "hy3": "tencent/hy3",
-            "hy3-preview": "tencent/hy3-preview"
+            "hy3-preview": "tencent/hy3-preview",
+            "qwen/qwen3.8-max": "qwen3.8-max",
+            "qwen/qwen3.8-max-preview": "qwen3.8-max-preview",
+            "deepseek/deepseek-v4-flash": "deepseek-v4-flash",
+            "deepseek/deepseek-v4-flash-0731": "deepseek-v4-flash-0731",
+            "z-ai/glm-5.2": "glm-5.2",
+            "zai/glm-5.2": "glm-5.2"
         ]
 
         let homePricing = AppPaths.home

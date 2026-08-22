@@ -8,10 +8,15 @@ The app does not require a separate cloud backend. It primarily reads session fi
 
 > This project is currently intended primarily for personal use on a local Mac. Local file formats and official APIs may change as the supported products evolve. Costs shown in the dashboard are estimates, while quotas and balances are labeled with their data sources.
 
+## Download
+
+Download the latest Apple Silicon (`arm64`) application from the [GitHub Releases page](https://github.com/HITLiuJiahao/ai-usage-bar/releases/latest). Unzip the download, move `AIUsageBar.app` to the Applications folder, and open it by right-clicking **Open** the first time if macOS asks for confirmation.
+
 ## Features
 
 - Runs in the macOS menu bar. Click the icon to open the dashboard; right-click for refresh, settings, and quit actions.
 - Supports seven time ranges: today, yesterday, this week, last week, this month, last month, and this year.
+- Distinguishes the standalone QwenWork client from the **Office Mode** inside the main Qianwen desktop app.
 - Uses a two-column card layout and adjusts its height based on the number of available providers. Click **By Model** to expand model-level details.
 - Displays tokens, input, output, cache reads, cache-hit rate, reasoning tokens, request counts, Credits, subscription windows, and estimated costs.
 - Refreshes automatically when the dashboard opens, on a background timer, or manually from the refresh control at the top.
@@ -25,10 +30,10 @@ The app does not require a separate cloud backend. It primarily reads session fi
 | Tool | Local data | Official/server-side data | Main metrics |
 | --- | --- | --- | --- |
 | Codex | `~/.codex/sessions`, `~/.codex/archived_sessions` | ChatGPT backend `wham/usage` subscription windows | Tokens, requests, models, input/output/cache usage, estimated cost, 5-hour and weekly quotas |
-| Qwen Work | `~/.qwenworkcn/projects` and compatible JSONL log directories | QwenWork `account-context` | Requests, sessions, active time, models, subscription/add-on/shared Credits |
+| QwenWork | `~/.qwenworkcn/projects` and compatible JSONL log directories | QwenWork `account-context` | Requests, sessions, active time, models, subscription/add-on/shared Credits |
+| Qianwen Office Mode | `~/Library/Application Support/Qianwen/qwen-agent/**/thread-events.jsonl` | — | Provider tokens, input/output/cache reads, requests, models, and public-price cost estimates from `workbench_*` events |
 | WorkBuddy | JSONL files under `~/.workbuddy/projects` and `~/.workbuddy/logs` | Local account information | Tokens, input/output, cache hits, reasoning, Credits, models, requests, and estimated cost; every JSONL record containing `providerData.rawUsage`, including `function_call` records, counts as one model call |
 | DeepSeek Harness | `.jsonl.zstd` files under `~/.dsh/sessions`, or Tokei cache | — | Tokens, input/output, cache reads/writes, reasoning, requests, models, and CNY cost |
-| TraeWork CN | Trae CN SQLCipher database and compatible local logs | Trae CN plan/quota API | Tokens, requests, models, Credits/quotas, and server-side status |
 | MiniMax Code | `~/.minimax/v2/sqlite/runtime-state.sqlite` and compatible logs | MiniMax coding plan API | Tokens, input/output, cache reads/writes, reasoning, requests, models, estimated cost, and 5-hour/weekly quotas |
 
 ### Data Source Principles
@@ -71,7 +76,8 @@ Special cases:
 - WorkBuddy matches the actual model names in its logs to Kimi/Hy model pricing and prefers the local Tokei pricing files.
 - WorkBuddy treats `prompt_tokens` as the complete prompt total. Its cache-hit rate is `prompt_cache_hit_tokens / prompt_tokens`; cache hits are not added to input or cost a second time.
 - MiniMax Code estimates cost from local model usage and MiniMax's official token prices. Actual Token Plan deductions are determined by MiniMax's server-side quota.
-- QwenWork and TraeWork CN Credits/plan quotas retain their original units. Subscription Credits are not presented as API costs.
+- QwenWork Credits/plan quotas retain their original units. Subscription Credits are not presented as API costs.
+- Qianwen Office Mode reads provider usage records from the main Qianwen desktop client's local `thread-events.jsonl` files. It estimates USD cost from the recorded model and public token prices; built-in rates cover `qwen3.8-max` ($2 / $6 / $0.25 / $2.50), `deepseek-v4-flash-0731` ($0.14 / $0.28 / $0.0028), and `glm-5.2` ($1.40 / $4.40 / $0.26) per million input / output / cache-read / cache-write tokens where listed. Official Credits, balance, and server-side billing are still not exposed by those local events.
 
 ## Privacy and Security
 
@@ -80,7 +86,6 @@ Special cases:
 - Access tokens and API keys entered manually are stored in the macOS Keychain, not in the project directory.
 - The app makes HTTPS requests to an official provider API only when it needs to read balance or quota information.
 - The encrypted QwenWork `auth-v2.dat` file is not bypassed or decrypted. Credentials that are not explicitly provided are never guessed.
-- TraeWork SQLCipher decryption requires a key explicitly configured by the user. The app does not attempt to extract keys from Trae processes or the Keychain.
 
 ## Requirements
 
@@ -88,7 +93,6 @@ Special cases:
 - Swift 5.9 or later.
 - The default build script produces an Apple Silicon (`arm64`) application.
 - The project uses only system frameworks: SwiftUI, AppKit, Combine, Security, and ServiceManagement.
-- TraeWork local details optionally require `sqlcipher`.
 - Reading compressed DeepSeek Harness logs requires `zstd`. If a Tokei cache is available, the cache can be used instead.
 
 ## Build and Run
@@ -127,23 +131,6 @@ Manual configuration is usually unnecessary: the app attempts to use the local s
 | --- | --- |
 | `QWENWORK_ACCESS_TOKEN` | QwenWork official Credits API |
 | `MINIMAX_API_KEY` | MiniMax coding plan quota API |
-| `AIUSAGEBAR_TRAE_KEY` | TraeWork CN SQLCipher database key |
-| `TOKEN_MONITOR_TRAE_KEY` | Compatible fallback variable for the TraeWork database key |
-
-The TraeWork CN key must be a 64-character hexadecimal string. It may also be stored at:
-
-```text
-~/Library/Application Support/AIUsageBar/trae-key.json
-```
-
-Example:
-
-```json
-{
-  "key": "the 64-character hexadecimal key configured on this Mac"
-}
-```
-
 Never commit real tokens, API keys, database keys, or local logs to GitHub.
 
 ## Settings and Accounts
@@ -173,10 +160,10 @@ Click the gear icon in the upper-right corner of the dashboard, or right-click t
 │   ├── Providers.swift               # Provider implementations and server-side quota reads
 │   ├── CodexUsage.swift              # Codex sessions, quotas, and pricing
 │   ├── QwenWorkUsage.swift           # Qwen Work JSONL aggregation
+│   ├── QianwenOfficeUsage.swift      # Main Qianwen Office Mode event aggregation
 │   ├── WorkBuddyUsage.swift          # WorkBuddy JSONL and Credits-ledger aggregation
 │   ├── DeepSeekHarnessUsage.swift    # DeepSeek Harness compressed-log aggregation
 │   ├── MiniMaxCodeUsage.swift        # MiniMax Code SQLite aggregation
-│   ├── TraeWorkUsage.swift           # TraeWork CN SQLCipher aggregation
 │   ├── QwenWorkQuota.swift           # Qwen Work official Credits
 │   ├── LocalData.swift               # Local JSON, JSONL, and compatibility parsing
 │   ├── Paths.swift                   # Local paths for supported clients
@@ -198,9 +185,9 @@ If the first full read fails, the app retries automatically. When an individual 
 ## Known Limitations
 
 - A product's quota, Credits, request count, and token count are different units and cannot be compared directly.
-- Client upgrades may change JSONL, SQLite, SQLCipher, or log fields. When a field cannot be parsed reliably, the dashboard shows **Unavailable** instead of guessing.
+- Client upgrades may change JSONL, SQLite, or log fields. When a field cannot be parsed reliably, the dashboard shows **Unavailable** instead of guessing.
 - The QwenWork official quota API requires a valid access token. Encrypted local sign-in state is not forcibly decrypted.
-- TraeWork CN token details depend on the current database schema and a SQLCipher key supplied by the user.
+- Qianwen Office Mode's local events expose provider token usage and model IDs, but not official Credits, balance, or server-side billing totals. Its displayed cost is a public-price estimate and may differ from the Office Mode subscription deduction.
 - Server-side subscription quotas may lag behind local session logs; the dashboard labels the sources separately.
 - Before a public release, add formal app signing, notarization, release packages, and a license.
 

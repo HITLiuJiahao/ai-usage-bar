@@ -63,20 +63,32 @@ enum CredentialKeychain {
 enum LocalAccountStore {
     private static let fileURL = AppPaths.appSupport.appendingPathComponent("accounts.json")
 
-    static func accounts(for provider: ProviderID? = nil) -> [SavedAccount] {
+    private static func loadAccounts() -> [SavedAccount] {
         guard let data = try? Data(contentsOf: fileURL),
-              let accounts = try? JSONDecoder().decode([SavedAccount].self, from: data)
+              let objects = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         else { return [] }
+
+        // Ignore account records for providers removed from the application
+        // without making the rest of the account file unreadable.
+        return objects.compactMap { object in
+            guard let rawProvider = object["provider"] as? String,
+                  ProviderID(rawValue: rawProvider) != nil,
+                  let accountData = try? JSONSerialization.data(withJSONObject: object),
+                  let account = try? JSONDecoder().decode(SavedAccount.self, from: accountData)
+            else { return nil }
+            return account
+        }
+    }
+
+    static func accounts(for provider: ProviderID? = nil) -> [SavedAccount] {
+        let accounts = loadAccounts()
         return accounts.filter { account in
             account.enabled && (provider == nil || account.provider == provider)
         }
     }
 
     static func allAccounts() -> [SavedAccount] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let accounts = try? JSONDecoder().decode([SavedAccount].self, from: data)
-        else { return [] }
-        return accounts
+        loadAccounts()
     }
 
     static func save(_ accounts: [SavedAccount]) throws {

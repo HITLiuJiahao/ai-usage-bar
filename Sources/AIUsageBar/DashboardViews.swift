@@ -46,6 +46,20 @@ private enum DashboardPeriod: String, CaseIterable, Identifiable {
     }
 }
 
+private enum DashboardMotion {
+    static let periodSelection = Animation.spring(
+        response: 0.34,
+        dampingFraction: 0.88,
+        blendDuration: 0.05
+    )
+
+    static let periodContent = Animation.spring(
+        response: 0.42,
+        dampingFraction: 0.90,
+        blendDuration: 0.05
+    )
+}
+
 enum DashboardLayout {
     static let referenceWidth: CGFloat = 1120
     // Return to the original desktop canvas. Keep the SwiftUI layout width
@@ -114,6 +128,7 @@ private struct DashboardCardHeightPreferenceKey: PreferenceKey {
 struct DashboardPopover: View {
     @ObservedObject var store: UsageStore
     let onSizeChange: (CGSize) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var period: DashboardPeriod = .today
     @State private var measuredCardHeights: [String: CGFloat] = [:]
     @Namespace private var periodSelectionNamespace
@@ -156,12 +171,14 @@ struct DashboardPopover: View {
                                             )
                                         }
                                     )
+                                    .transition(providerCardTransition)
                             }
                         }
+                        .animation(
+                            reduceMotion ? nil : DashboardMotion.periodContent,
+                            value: period
+                        )
                     }
-                    .id(period.id)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                    .animation(.easeInOut(duration: 0.24), value: period)
                 }
 
             dashboardFooter
@@ -269,7 +286,7 @@ struct DashboardPopover: View {
                         .font(.system(size: 23, weight: .bold, design: .rounded))
                     DashboardRefreshButton(store: store)
                 }
-                Text("Codex · MiniMax Code · WorkBuddy · TraeWork CN · DeepSeek Harness · 千问办公 · Token、模型与用量")
+                Text("Codex · MiniMax Code · WorkBuddy · DeepSeek Harness · QwenWork · 千问办公模式 · Token、模型与用量")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
             }
@@ -301,8 +318,13 @@ struct DashboardPopover: View {
         HStack(spacing: 3) {
             ForEach(DashboardPeriod.allCases) { value in
                 Button {
-                    withAnimation(.easeOut(duration: 0.16)) {
+                    guard period != value else { return }
+                    if reduceMotion {
                         period = value
+                    } else {
+                        withAnimation(DashboardMotion.periodSelection) {
+                            period = value
+                        }
                     }
                 } label: {
                     Text(value.title)
@@ -314,16 +336,14 @@ struct DashboardPopover: View {
                             if period == value {
                                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                                     .fill(Color.white.opacity(0.13))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                                    )
                                     .matchedGeometryEffect(
                                         id: "period-selection",
                                         in: periodSelectionNamespace
                                     )
-                            }
-                        }
-                        .overlay {
-                            if period == value {
-                                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
                             }
                         }
                         .contentShape(Rectangle())
@@ -336,6 +356,14 @@ struct DashboardPopover: View {
         .frame(maxWidth: .infinity)
         .padding(5)
         .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var providerCardTransition: AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .scale(scale: 0.985, anchor: .center)),
+            removal: .opacity
+        )
     }
 
     private var dashboardFooter: some View {
@@ -404,7 +432,9 @@ private struct DashboardProviderCard: View {
             preferredWindows = [.weekly, .fiveHours, .billing]
         case .workBuddy:
             preferredWindows = [.monthly, .billing, .weekly]
-        case .traeWork, .qwenWork:
+        case .qwenWork:
+            preferredWindows = [.billing, .monthly, .weekly]
+        case .qianwenOffice:
             preferredWindows = [.billing, .monthly, .weekly]
         case .deepSeekHarness:
             preferredWindows = [.billing, .monthly, .weekly]
@@ -720,9 +750,11 @@ private struct DashboardProviderCard: View {
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+                    .contentTransition(.opacity)
                 Text(primaryLabel(primaryMetric))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.52))
+                    .contentTransition(.opacity)
             } else {
                 Text("—")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
@@ -868,7 +900,7 @@ private struct DashboardProviderCard: View {
 }
 
 private struct DashboardStat: Identifiable {
-    let id = UUID()
+    let id: String
     let symbol: String
     let title: String
     let value: String
@@ -882,6 +914,7 @@ private struct DashboardStat: Identifiable {
         usesCacheHitIcon: Bool = false,
         progress: Double? = nil
     ) {
+        self.id = title
         self.symbol = symbol
         self.title = title
         self.value = value
@@ -915,6 +948,7 @@ private struct DashboardStatView: View {
                     .foregroundStyle(.white.opacity(0.92))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
+                    .contentTransition(.opacity)
             }
         }
     }
@@ -1172,10 +1206,10 @@ private enum DashboardPalette {
         case .codex: return Color(red: 0.45, green: 0.78, blue: 1.0)
         case .chatGPT: return Color(red: 0.35, green: 0.82, blue: 0.72)
         case .qwenWork: return Color(red: 0.42, green: 0.69, blue: 1.0)
+        case .qianwenOffice: return Color(red: 0.33, green: 0.80, blue: 0.88)
         case .deepSeekHarness: return Color(red: 0.86, green: 0.48, blue: 0.72)
         case .workBuddy: return Color(red: 0.43, green: 0.84, blue: 0.75)
         case .miniMax: return Color(red: 0.72, green: 0.57, blue: 1.0)
-        case .traeWork: return Color(red: 1.0, green: 0.66, blue: 0.30)
         }
     }
 
