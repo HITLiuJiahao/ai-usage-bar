@@ -309,6 +309,7 @@ enum ProviderPalette {
         case .chatGPT: return .teal
         case .qwenWork: return .blue
         case .zcode: return .cyan
+        case .openCode: return .gray
         case .qianwenOffice: return .cyan
         case .deepSeekHarness: return .pink
         case .workBuddy: return .indigo
