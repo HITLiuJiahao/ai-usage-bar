@@ -16,7 +16,7 @@ Download the latest Apple Silicon (`arm64`) ZIP directly: [AIUsageBar-arm64-rele
 
 - Runs in the macOS menu bar. Click the icon to open the dashboard; right-click for refresh, settings, and quit actions.
 - Supports seven time ranges: today, yesterday, this week, last week, this month, last month, and this year.
-- Distinguishes the standalone QwenWork client from the **Office Mode** inside the main Qianwen desktop app.
+- Distinguishes the standalone QwenWork client from ZCode's local App Usage records. Qianwen Office Mode monitoring is temporarily disabled.
 - Uses a two-column card layout and adjusts its height based on the number of available providers. Click **By Model** to expand model-level details.
 - Displays tokens, input, output, cache reads, cache-hit rate, reasoning tokens, request counts, Credits, subscription windows, and estimated costs.
 - Refreshes automatically when the dashboard opens, on a background timer, or manually from the refresh control at the top.
@@ -31,7 +31,8 @@ Download the latest Apple Silicon (`arm64`) ZIP directly: [AIUsageBar-arm64-rele
 | --- | --- | --- | --- |
 | Codex | `~/.codex/sessions`, `~/.codex/archived_sessions` | ChatGPT backend `wham/usage` subscription windows | Tokens, requests, models, input/output/cache usage, estimated cost, 5-hour and weekly quotas |
 | QwenWork | `~/.qwenworkcn/projects` and compatible JSONL log directories | QwenWork `account-context` | Requests, sessions, active time, models, subscription/add-on/shared Credits |
-| Qianwen Office Mode | `~/Library/Application Support/Qianwen/qwen-agent/**/thread-events.jsonl` | — | Provider tokens, input/output/cache reads, requests, models, and public-price cost estimates from `workbench_*` events |
+| ZCode | `~/.zcode/cli/db/db.sqlite` (`model_usage`) | — | Tokens, input/output/cache reads, reasoning, requests, sessions, models, and price-based cost estimates |
+| Qianwen Office Mode | — (temporarily disabled) | — | The adapter remains in the source tree but is not scanned or displayed |
 | WorkBuddy | JSONL files under `~/.workbuddy/projects` and `~/.workbuddy/logs` | Local account information | Tokens, input/output, cache hits, reasoning, Credits, models, requests, and estimated cost; every JSONL record containing `providerData.rawUsage`, including `function_call` records, counts as one model call |
 | DeepSeek Harness | `.jsonl.zstd` files under `~/.dsh/sessions`, or Tokei cache | — | Tokens, input/output, cache reads/writes, reasoning, requests, models, and CNY cost |
 | MiniMax Code | `~/.minimax/v2/sqlite/runtime-state.sqlite` and compatible logs | MiniMax coding plan API | Tokens, input/output, cache reads/writes, reasoning, requests, models, estimated cost, and 5-hour/weekly quotas |
@@ -75,9 +76,10 @@ Special cases:
 - DeepSeek Harness uses DeepSeek's official peak/off-peak CNY pricing based on Beijing time, and the dashboard displays `¥`.
 - WorkBuddy matches the actual model names in its logs to Kimi/Hy model pricing and prefers the local Tokei pricing files.
 - WorkBuddy treats `prompt_tokens` as the complete prompt total. Its cache-hit rate is `prompt_cache_hit_tokens / prompt_tokens`; cache hits are not added to input or cost a second time.
+- ZCode treats `input_tokens` as the complete prompt total and uses `computed_total_tokens` as the authoritative total. Cache reads are retained as a separate breakdown for hit-rate and cost estimation.
 - MiniMax Code estimates cost from local model usage and MiniMax's official token prices. Actual Token Plan deductions are determined by MiniMax's server-side quota.
 - QwenWork Credits/plan quotas retain their original units. Subscription Credits are not presented as API costs.
-- Qianwen Office Mode reads provider usage records from the main Qianwen desktop client's local `thread-events.jsonl` files. It estimates USD cost from the recorded model and public token prices; built-in rates cover `qwen3.8-max` ($2 / $6 / $0.25 / $2.50), `deepseek-v4-flash-0731` ($0.14 / $0.28 / $0.0028), and `glm-5.2` ($1.40 / $4.40 / $0.26) per million input / output / cache-read / cache-write tokens where listed. Official Credits, balance, and server-side billing are still not exposed by those local events.
+- Qianwen Office Mode pricing support remains in the source tree for a future re-enable, but its scanner is currently disabled.
 
 ## Privacy and Security
 
@@ -160,7 +162,8 @@ Click the gear icon in the upper-right corner of the dashboard, or right-click t
 │   ├── Providers.swift               # Provider implementations and server-side quota reads
 │   ├── CodexUsage.swift              # Codex sessions, quotas, and pricing
 │   ├── QwenWorkUsage.swift           # Qwen Work JSONL aggregation
-│   ├── QianwenOfficeUsage.swift      # Main Qianwen Office Mode event aggregation
+│   ├── ZCodeUsage.swift               # ZCode local SQLite model usage aggregation
+│   ├── QianwenOfficeUsage.swift       # Main Qianwen Office Mode adapter (disabled)
 │   ├── WorkBuddyUsage.swift          # WorkBuddy JSONL and Credits-ledger aggregation
 │   ├── DeepSeekHarnessUsage.swift    # DeepSeek Harness compressed-log aggregation
 │   ├── MiniMaxCodeUsage.swift        # MiniMax Code SQLite aggregation
@@ -187,7 +190,8 @@ If the first full read fails, the app retries automatically. When an individual 
 - A product's quota, Credits, request count, and token count are different units and cannot be compared directly.
 - Client upgrades may change JSONL, SQLite, or log fields. When a field cannot be parsed reliably, the dashboard shows **Unavailable** instead of guessing.
 - The QwenWork official quota API requires a valid access token. Encrypted local sign-in state is not forcibly decrypted.
-- Qianwen Office Mode's local events expose provider token usage and model IDs, but not official Credits, balance, or server-side billing totals. Its displayed cost is a public-price estimate and may differ from the Office Mode subscription deduction.
+- Qianwen Office Mode monitoring is temporarily disabled; its local adapter is retained for a future re-enable.
+- ZCode local App Usage is read from the `model_usage` table. Remote Z.ai/BigModel Coding Plan quota data is not read by this adapter.
 - Server-side subscription quotas may lag behind local session logs; the dashboard labels the sources separately.
 - Before a public release, add formal app signing, notarization, release packages, and a license.
 

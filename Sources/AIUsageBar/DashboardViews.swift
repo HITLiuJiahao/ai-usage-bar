@@ -286,7 +286,7 @@ struct DashboardPopover: View {
                         .font(.system(size: 23, weight: .bold, design: .rounded))
                     DashboardRefreshButton(store: store)
                 }
-                Text("Codex · MiniMax Code · WorkBuddy · DeepSeek Harness · QwenWork · 千问办公模式 · Token、模型与用量")
+                Text("Codex · ZCode · MiniMax Code · WorkBuddy · DeepSeek Harness · QwenWork · Token、模型与用量")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
             }
@@ -428,7 +428,7 @@ private struct DashboardProviderCard: View {
         let candidates = account.metrics.filter { $0.kind == .quota }
         let preferredWindows: [UsageWindow]
         switch snapshot.provider {
-        case .codex, .miniMax, .chatGPT:
+        case .codex, .miniMax, .chatGPT, .zcode:
             preferredWindows = [.weekly, .fiveHours, .billing]
         case .workBuddy:
             preferredWindows = [.monthly, .billing, .weekly]
@@ -1206,6 +1206,7 @@ private enum DashboardPalette {
         case .codex: return Color(red: 0.45, green: 0.78, blue: 1.0)
         case .chatGPT: return Color(red: 0.35, green: 0.82, blue: 0.72)
         case .qwenWork: return Color(red: 0.42, green: 0.69, blue: 1.0)
+        case .zcode: return Color(red: 0.34, green: 0.78, blue: 0.92)
         case .qianwenOffice: return Color(red: 0.33, green: 0.80, blue: 0.88)
         case .deepSeekHarness: return Color(red: 0.86, green: 0.48, blue: 0.72)
         case .workBuddy: return Color(red: 0.43, green: 0.84, blue: 0.75)
