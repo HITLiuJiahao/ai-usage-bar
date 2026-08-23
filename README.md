@@ -16,7 +16,7 @@ Download the latest Apple Silicon (`arm64`) ZIP directly: [AIUsageBar-arm64-rele
 
 - Runs in the macOS menu bar. Click the icon to open the dashboard; right-click for refresh, settings, and quit actions.
 - Supports seven time ranges: today, yesterday, this week, last week, this month, last month, and this year.
-- Distinguishes the standalone QwenWork client from ZCode's local App Usage records. Qianwen Office Mode monitoring is temporarily disabled.
+- Distinguishes the standalone QwenWork client from ZCode and OpenCode local usage records. Qianwen Office Mode and DeepSeek Harness monitoring are temporarily disabled.
 - Uses a two-column card layout and adjusts its height based on the number of available providers. Click **By Model** to expand model-level details.
 - Displays tokens, input, output, cache reads, cache-hit rate, reasoning tokens, request counts, Credits, subscription windows, and estimated costs.
 - Refreshes automatically when the dashboard opens, on a background timer, or manually from the refresh control at the top.
@@ -32,9 +32,10 @@ Download the latest Apple Silicon (`arm64`) ZIP directly: [AIUsageBar-arm64-rele
 | Codex | `~/.codex/sessions`, `~/.codex/archived_sessions` | ChatGPT backend `wham/usage` subscription windows | Tokens, requests, models, input/output/cache usage, estimated cost, 5-hour and weekly quotas |
 | QwenWork | `~/.qwenworkcn/projects` and compatible JSONL log directories | QwenWork `account-context` | Requests, sessions, active time, models, subscription/add-on/shared Credits |
 | ZCode | `~/.zcode/cli/db/db.sqlite` (`model_usage`) | — | Tokens, input/output/cache reads, reasoning, requests, sessions, models, and price-based cost estimates |
+| OpenCode | `~/.local/share/opencode/opencode.db` (`message`) | — | Assistant responses, input/output/cache reads/writes, reasoning, sessions, models, and estimated cost |
 | Qianwen Office Mode | — (temporarily disabled) | — | The adapter remains in the source tree but is not scanned or displayed |
 | WorkBuddy | JSONL files under `~/.workbuddy/projects` and `~/.workbuddy/logs` | Local account information | Tokens, input/output, cache hits, reasoning, Credits, models, requests, and estimated cost; every JSONL record containing `providerData.rawUsage`, including `function_call` records, counts as one model call |
-| DeepSeek Harness | `.jsonl.zstd` files under `~/.dsh/sessions`, or Tokei cache | — | Tokens, input/output, cache reads/writes, reasoning, requests, models, and CNY cost |
+| DeepSeek Harness | — (temporarily disabled) | — | The adapter remains in the source tree but is not scanned or displayed |
 | MiniMax Code | `~/.minimax/v2/sqlite/runtime-state.sqlite` and compatible logs | MiniMax coding plan API | Tokens, input/output, cache reads/writes, reasoning, requests, models, estimated cost, and 5-hour/weekly quotas |
 
 ### Data Source Principles
@@ -73,10 +74,11 @@ Uncached input tokens are calculated by subtracting cache-read and cache-write t
 Special cases:
 
 - Codex Auto Review is mapped to `GPT-5.3-Codex` pricing.
-- DeepSeek Harness uses DeepSeek's official peak/off-peak CNY pricing based on Beijing time, and the dashboard displays `¥`.
+- DeepSeek Harness pricing support remains in the source tree for a future re-enable, but its scanner is currently disabled.
 - WorkBuddy matches the actual model names in its logs to Kimi/Hy model pricing and prefers the local Tokei pricing files.
 - WorkBuddy treats `prompt_tokens` as the complete prompt total. Its cache-hit rate is `prompt_cache_hit_tokens / prompt_tokens`; cache hits are not added to input or cost a second time.
 - ZCode treats `input_tokens` as the complete prompt total and uses `computed_total_tokens` as the authoritative total. Cache reads are retained as a separate breakdown for hit-rate and cost estimation.
+- OpenCode reads assistant messages from its local `opencode.db` SQLite database. Its `tokens.input` excludes cache reads, so the dashboard keeps cache reads/writes separate and includes them in the total prompt-token denominator and cost estimate.
 - MiniMax Code estimates cost from local model usage and MiniMax's official token prices. Actual Token Plan deductions are determined by MiniMax's server-side quota.
 - QwenWork Credits/plan quotas retain their original units. Subscription Credits are not presented as API costs.
 - Qianwen Office Mode pricing support remains in the source tree for a future re-enable, but its scanner is currently disabled.
@@ -163,9 +165,10 @@ Click the gear icon in the upper-right corner of the dashboard, or right-click t
 │   ├── CodexUsage.swift              # Codex sessions, quotas, and pricing
 │   ├── QwenWorkUsage.swift           # Qwen Work JSONL aggregation
 │   ├── ZCodeUsage.swift               # ZCode local SQLite model usage aggregation
+│   ├── OpenCodeUsage.swift            # OpenCode local SQLite message aggregation
 │   ├── QianwenOfficeUsage.swift       # Main Qianwen Office Mode adapter (disabled)
 │   ├── WorkBuddyUsage.swift          # WorkBuddy JSONL and Credits-ledger aggregation
-│   ├── DeepSeekHarnessUsage.swift    # DeepSeek Harness compressed-log aggregation
+│   ├── DeepSeekHarnessUsage.swift     # DeepSeek Harness adapter (disabled)
 │   ├── MiniMaxCodeUsage.swift        # MiniMax Code SQLite aggregation
 │   ├── QwenWorkQuota.swift           # Qwen Work official Credits
 │   ├── LocalData.swift               # Local JSON, JSONL, and compatibility parsing
@@ -192,6 +195,8 @@ If the first full read fails, the app retries automatically. When an individual 
 - The QwenWork official quota API requires a valid access token. Encrypted local sign-in state is not forcibly decrypted.
 - Qianwen Office Mode monitoring is temporarily disabled; its local adapter is retained for a future re-enable.
 - ZCode local App Usage is read from the `model_usage` table. Remote Z.ai/BigModel Coding Plan quota data is not read by this adapter.
+- OpenCode local usage is read from `message.data` in the first available `opencode.db` under `XDG_DATA_HOME`, `~/.local/share`, `~/Library/Application Support`, or `~/.config`. Remote provider quotas are not read by this adapter.
+- DeepSeek Harness monitoring is temporarily disabled; its compressed-log adapter is retained for a future re-enable.
 - Server-side subscription quotas may lag behind local session logs; the dashboard labels the sources separately.
 - Before a public release, add formal app signing, notarization, release packages, and a license.
 
