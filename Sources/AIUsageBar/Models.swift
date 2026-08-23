@@ -5,6 +5,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     case chatGPT
     case qwenWork
     case zcode
+    case openCode
     case qianwenOffice
     case deepSeekHarness
     case workBuddy
@@ -14,8 +15,8 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
 
     // Keep the dashboard order stable for the two-column layout.
     static let trackedCases: [ProviderID] = [
-        .codex, .qwenWork, .zcode,
-        .workBuddy, .deepSeekHarness,
+        .codex, .qwenWork, .zcode, .openCode,
+        .workBuddy,
         .miniMax
     ]
 
@@ -25,6 +26,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .chatGPT: return "ChatGPT"
         case .qwenWork: return "QwenWork"
         case .zcode: return "ZCode"
+        case .openCode: return "OpenCode"
         case .qianwenOffice: return "千问办公模式"
         case .deepSeekHarness: return "DeepSeek Harness"
         case .workBuddy: return "WorkBuddy"
@@ -38,6 +40,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .chatGPT: return "ChatGPT"
         case .qwenWork: return "QwenWork"
         case .zcode: return "ZCode"
+        case .openCode: return "OpenCode"
         case .qianwenOffice: return "Qwen Office"
         case .deepSeekHarness: return "DeepSeek"
         case .workBuddy: return "WorkBuddy"
@@ -51,6 +54,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .chatGPT: return "bubble.left.and.bubble.right"
         case .qwenWork: return "sparkles"
         case .zcode: return "chevron.left.forwardslash.chevron.right"
+        case .openCode: return "terminal.fill"
         case .qianwenOffice: return "briefcase.fill"
         case .deepSeekHarness: return "brain.head.profile"
         case .workBuddy: return "person.2.wave.2"
