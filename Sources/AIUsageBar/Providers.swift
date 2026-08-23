@@ -529,8 +529,8 @@ enum ProviderRegistry {
         CodexProvider(),
         QwenWorkProvider(),
         ZCodeProvider(),
+        OpenCodeProvider(),
         WorkBuddyProvider(),
-        DeepSeekHarnessProvider(),
         MiniMaxProvider()
     ]
 }
@@ -626,6 +626,51 @@ struct ZCodeProvider: UsageProvider {
         return SnapshotFactory.make(
             provider: id,
             accountName: scan.latestModel.map { "ZCode · \($0)" } ?? "本机活动账户",
+            state: state,
+            metrics: metrics,
+            message: message,
+            source: scan.responseCount > 0 ? .local : .unavailable,
+            modelUsages: UsageMetrics.modelUsages(summary: scan.summary)
+        )
+    }
+}
+
+struct OpenCodeProvider: UsageProvider {
+    let id: ProviderID = .openCode
+
+    func fetch() async -> ProviderSnapshot {
+        let scan = await Task.detached(priority: .utility) {
+            OpenCodeUsageScanner.scan()
+        }.value
+        let metrics = UsageMetrics.localMetrics(
+            summary: scan.summary,
+            includeMoney: true
+        )
+
+        let state: ProviderState
+        if scan.responseCount > 0 {
+            state = .connected
+        } else if scan.hasDatabase {
+            state = .partial
+        } else {
+            state = .unavailable
+        }
+
+        var message: String
+        if scan.responseCount > 0 {
+            message = "Token、模型、缓存、请求和会话来自 OpenCode 本机 SQLite 的 message 表；缓存读取/写入作为独立输入项统计，成本优先使用消息内记录或本机价格表。"
+            if !scan.unpricedModels.isEmpty {
+                message += "\n以下模型未匹配到价格，仅计入 Token，不计入成本：\(scan.unpricedModels.joined(separator: ", "))。"
+            }
+        } else if scan.hasDatabase {
+            message = "已找到 OpenCode 本机用量数据库，但暂未识别到有 Token 的 assistant 消息。"
+        } else {
+            message = "未找到 OpenCode 本机用量数据库（~/.local/share/opencode/opencode.db）。请先启动并使用 OpenCode。"
+        }
+
+        return SnapshotFactory.make(
+            provider: id,
+            accountName: scan.latestModel.map { "OpenCode · \($0)" } ?? "本机活动账户",
             state: state,
             metrics: metrics,
             message: message,
