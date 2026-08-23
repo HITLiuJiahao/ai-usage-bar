@@ -52,6 +52,25 @@ enum AppPaths {
     ]
     static let qwenDatabase = qwenRoot.appendingPathComponent("data/agents.db")
 
+    /// ZCode stores its local App Usage ledger in the CLI data directory.
+    /// The desktop app and its bundled CLI share this SQLite database.
+    static let zcodeRoot = home.appendingPathComponent(".zcode", isDirectory: true)
+    static let zcodeDatabaseCandidates = [
+        zcodeRoot
+            .appendingPathComponent("cli", isDirectory: true)
+            .appendingPathComponent("db", isDirectory: true)
+            .appendingPathComponent("db.sqlite"),
+        zcodeRoot
+            .appendingPathComponent("v2", isDirectory: true)
+            .appendingPathComponent("db", isDirectory: true)
+            .appendingPathComponent("db.sqlite"),
+        home
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("ZCode", isDirectory: true)
+            .appendingPathComponent("db.sqlite")
+    ]
+
     static let deepSeekHarnessRoot = home.appendingPathComponent(".dsh", isDirectory: true)
     static let deepSeekHarnessSessions = deepSeekHarnessRoot
         .appendingPathComponent("sessions", isDirectory: true)
