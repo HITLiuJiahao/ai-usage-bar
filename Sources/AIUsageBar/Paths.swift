@@ -71,6 +71,33 @@ enum AppPaths {
             .appendingPathComponent("db.sqlite")
     ]
 
+    /// OpenCode stores its message ledger in an SQLite database. The
+    /// XDG path is the default used by the official CLI; the Application
+    /// Support and config paths cover macOS installations that override it.
+    static var openCodeDatabaseCandidates: [URL] {
+        var roots: [URL] = []
+        if let xdgDataHome = ProcessInfo.processInfo.environment["XDG_DATA_HOME"],
+           !xdgDataHome.isEmpty {
+            roots.append(URL(fileURLWithPath: xdgDataHome, isDirectory: true))
+        }
+        roots.append(contentsOf: [
+            home
+                .appendingPathComponent(".local", isDirectory: true)
+                .appendingPathComponent("share", isDirectory: true),
+            home
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Application Support", isDirectory: true),
+            home.appendingPathComponent(".config", isDirectory: true)
+        ])
+
+        var seen: Set<String> = []
+        return roots.compactMap { root in
+            let directory = root.appendingPathComponent("opencode", isDirectory: true)
+            guard seen.insert(directory.path).inserted else { return nil }
+            return directory.appendingPathComponent("opencode.db")
+        }
+    }
+
     static let deepSeekHarnessRoot = home.appendingPathComponent(".dsh", isDirectory: true)
     static let deepSeekHarnessSessions = deepSeekHarnessRoot
         .appendingPathComponent("sessions", isDirectory: true)
