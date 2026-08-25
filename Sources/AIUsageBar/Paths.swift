@@ -98,6 +98,19 @@ enum AppPaths {
         }
     }
 
+    /// Doubao Work keeps its local network-event ledger in the Tea LevelDB
+    /// store and mirrors recent events in the SDK log directory.
+    static let doubaoWorkRoot = home
+        .appendingPathComponent("Library", isDirectory: true)
+        .appendingPathComponent("Application Support", isDirectory: true)
+        .appendingPathComponent("DoubaoWork", isDirectory: true)
+    static let doubaoWorkTeaDatabase = doubaoWorkRoot
+        .appendingPathComponent("Tea", isDirectory: true)
+        .appendingPathComponent("tea.db", isDirectory: true)
+    static let doubaoWorkSDKLogs = doubaoWorkRoot
+        .appendingPathComponent("sdk_storage", isDirectory: true)
+        .appendingPathComponent("log", isDirectory: true)
+
     static let deepSeekHarnessRoot = home.appendingPathComponent(".dsh", isDirectory: true)
     static let deepSeekHarnessSessions = deepSeekHarnessRoot
         .appendingPathComponent("sessions", isDirectory: true)
@@ -132,4 +145,10 @@ enum AppPaths {
         .appendingPathComponent("Library", isDirectory: true)
         .appendingPathComponent("Application Support", isDirectory: true)
         .appendingPathComponent("AIUsageBar", isDirectory: true)
+
+    /// The last successful provider snapshots are kept here so local usage
+    /// remains visible when a client is closed, its database is temporarily
+    /// locked, or AI Usage Bar itself is restarted.
+    static let usageSnapshotCache = appSupport.appendingPathComponent("usage-snapshots.json")
+    static let doubaoWorkScanCache = appSupport.appendingPathComponent("doubao-work-scan-cache.json")
 }

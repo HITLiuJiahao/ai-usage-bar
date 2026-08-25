@@ -12,7 +12,7 @@ enum HTTPJSON {
     ) async throws -> HTTPJSONResult {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 20
+        request.timeoutInterval = 5
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
@@ -34,7 +34,7 @@ enum HTTPJSON {
     ) async throws -> HTTPJSONResult {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 20
+        request.timeoutInterval = 5
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         for (key, value) in headers {
@@ -529,6 +529,7 @@ enum ProviderRegistry {
         CodexProvider(),
         QwenWorkProvider(),
         ZCodeProvider(),
+        DoubaoWorkProvider(),
         OpenCodeProvider(),
         WorkBuddyProvider(),
         MiniMaxProvider()
@@ -676,6 +677,45 @@ struct OpenCodeProvider: UsageProvider {
             message: message,
             source: scan.responseCount > 0 ? .local : .unavailable,
             modelUsages: UsageMetrics.modelUsages(summary: scan.summary)
+        )
+    }
+}
+
+struct DoubaoWorkProvider: UsageProvider {
+    let id: ProviderID = .doubaoWork
+
+    func fetch() async -> ProviderSnapshot {
+        let scan = await Task.detached(priority: .utility) {
+            DoubaoWorkUsageScanner.scan()
+        }.value
+        let metrics = UsageMetrics.localMetrics(summary: scan.summary)
+        let hasRoot = FileManager.default.fileExists(atPath: AppPaths.doubaoWorkRoot.path)
+
+        let state: ProviderState
+        if scan.responseCount > 0 {
+            state = .connected
+        } else if hasRoot || scan.hasLogFiles {
+            state = .partial
+        } else {
+            state = .unavailable
+        }
+
+        let message: String
+        if scan.responseCount > 0 {
+            message = "请求次数来自豆包工作本机的 Tea/tea.db 与 sdk_storage/log 网络事件；仅统计 /chat/completion 和 /samantha/chat/completion，并对重复日志去重。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
+        } else if hasRoot || scan.hasLogFiles {
+            message = "已找到豆包工作本机日志，但暂未识别到工作模式模型完成请求（/chat/completion 或 /samantha/chat/completion）。"
+        } else {
+            message = "未找到豆包工作本机日志（~/Library/Application Support/DoubaoWork）。请先启动并使用豆包工作。"
+        }
+
+        return SnapshotFactory.make(
+            provider: id,
+            accountName: "豆包工作 · 工作模式",
+            state: state,
+            metrics: metrics,
+            message: message,
+            source: scan.responseCount > 0 ? .local : .unavailable
         )
     }
 }

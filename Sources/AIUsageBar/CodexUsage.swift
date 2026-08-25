@@ -278,7 +278,7 @@ enum CodexUsageScanner {
         let reasoning: Int
     }
 
-    private struct CodexEvent: Codable {
+    private struct CodexEvent: Codable, Equatable {
         let timestamp: Double
         let dateKey: String
         let totalInput: Int?
@@ -334,6 +334,7 @@ enum CodexUsageScanner {
 
     private static let cacheVersion = 1
     private static let cacheURL = AppPaths.appSupport.appendingPathComponent("codex-scan-cache.json")
+    private static let incrementalOverlapBytes: Int64 = 2 * 1024 * 1024
     private static let tokenMarker = Data("\"token_count\"".utf8)
     private static let modelMarker = Data("\"turn_context\"".utf8)
     private static let sessionMarker = Data("\"session_meta\"".utf8)
@@ -351,6 +352,15 @@ enum CodexUsageScanner {
 
             if let cached = previous[path], cached.size == size, cached.modifiedAt == modifiedAt {
                 current[path] = cached
+            } else if let cached = previous[path],
+                      cached.size > 0,
+                      size > cached.size {
+                current[path] = parseAppendedFile(
+                    url: url,
+                    previous: cached,
+                    size: size,
+                    modifiedAt: modifiedAt
+                )
             } else {
                 current[path] = parseFile(url: url, size: size, modifiedAt: modifiedAt)
             }
@@ -388,6 +398,33 @@ enum CodexUsageScanner {
             latestQuota: latestQuota,
             hasRolloutFiles: !files.isEmpty,
             recognizedEventCount: recognizedEventCount
+        )
+    }
+
+    private static func parseAppendedFile(
+        url: URL,
+        previous: FileEntry,
+        size: Int64,
+        modifiedAt: Double
+    ) -> FileEntry {
+        let offset = max(0, previous.size - incrementalOverlapBytes)
+        let tail = parseFile(
+            url: url,
+            size: size,
+            modifiedAt: modifiedAt,
+            fromOffset: offset,
+            initial: previous
+        )
+        let overlap = sharedSuffixPrefixCount(previous.events, tail.events)
+        let events = previous.events + tail.events.dropFirst(overlap)
+
+        return FileEntry(
+            size: size,
+            modifiedAt: modifiedAt,
+            sessionID: tail.sessionID ?? previous.sessionID,
+            forkedFromID: tail.forkedFromID ?? previous.forkedFromID,
+            events: events,
+            latestQuota: tail.latestQuota ?? previous.latestQuota
         )
     }
 
@@ -440,16 +477,22 @@ enum CodexUsageScanner {
         }
     }
 
-    private static func parseFile(url: URL, size: Int64, modifiedAt: Double) -> FileEntry {
-        var sessionID: String?
-        var forkedFromID: String?
-        var currentModel: String?
-        var previousTotalKey: EventKey?
+    private static func parseFile(
+        url: URL,
+        size: Int64,
+        modifiedAt: Double,
+        fromOffset: Int64 = 0,
+        initial: FileEntry? = nil
+    ) -> FileEntry {
+        var sessionID = initial?.sessionID
+        var forkedFromID = initial?.forkedFromID
+        var currentModel = initial?.events.last?.model
+        var previousTotalKey = initial?.events.last?.totalKey
         var events: [CodexEvent] = []
-        var latestQuota: CodexQuotaSnapshot?
+        var latestQuota = initial?.latestQuota
         let fallbackDate = Date(timeIntervalSince1970: modifiedAt)
 
-        forEachLine(at: url) { line in
+        forEachLine(at: url, fromOffset: fromOffset) { line in
             guard line.range(of: tokenMarker) != nil
                 || line.range(of: modelMarker) != nil
                 || line.range(of: sessionMarker) != nil else { return }
@@ -548,9 +591,20 @@ enum CodexUsageScanner {
         )
     }
 
-    private static func forEachLine(at url: URL, body: (Data) -> Void) {
+    private static func forEachLine(
+        at url: URL,
+        fromOffset: Int64 = 0,
+        body: (Data) -> Void
+    ) {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return }
         defer { try? handle.close() }
+        if fromOffset > 0 {
+            do {
+                try handle.seek(toOffset: UInt64(fromOffset))
+            } catch {
+                return
+            }
+        }
 
         var buffer = Data()
         let maxRelevantLineBytes = 2 * 1024 * 1024
@@ -579,6 +633,26 @@ enum CodexUsageScanner {
             }
         }
         if !buffer.isEmpty, buffer.count <= maxRelevantLineBytes { body(buffer) }
+    }
+
+    private static func sharedSuffixPrefixCount(
+        _ existing: [CodexEvent],
+        _ incoming: [CodexEvent]
+    ) -> Int {
+        let maximum = min(existing.count, incoming.count)
+        guard maximum > 0 else { return 0 }
+
+        for count in stride(from: maximum, through: 1, by: -1) {
+            var matches = true
+            for index in 0..<count {
+                if existing[existing.count - count + index] != incoming[index] {
+                    matches = false
+                    break
+                }
+            }
+            if matches { return count }
+        }
+        return 0
     }
 
     private static func canonicalEntries(_ entries: [String: FileEntry]) -> [String: FileEntry] {
@@ -712,18 +786,20 @@ enum CodexQuotaService {
     }
 
     private static let cacheURL = AppPaths.appSupport.appendingPathComponent("codex-quota-cache.json")
+    private static let successfulCacheTTL: TimeInterval = 5 * 60
+    private static let failedCacheTTL: TimeInterval = 5 * 60
     private static var memory: PersistedCache?
 
     static func fetchLive() async -> CodexQuotaFetchResult? {
         let now = Date()
         let cache = loadCache()
-        if let cache, now.timeIntervalSince(cache.fetchedAt) < 30 {
+        if let cache, now.timeIntervalSince(cache.fetchedAt) < successfulCacheTTL {
             return CodexQuotaFetchResult(snapshot: cache.snapshot, source: .cached)
         }
         if let cache,
            let lastFailureAt = cache.lastFailureAt,
-           now.timeIntervalSince(lastFailureAt) < 300,
-           now.timeIntervalSince(cache.fetchedAt) < 300 {
+           now.timeIntervalSince(lastFailureAt) < failedCacheTTL,
+           now.timeIntervalSince(cache.fetchedAt) < failedCacheTTL {
             return CodexQuotaFetchResult(snapshot: cache.snapshot, source: .cached)
         }
         guard let auth = authContext() else {
