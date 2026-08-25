@@ -150,4 +150,5 @@ enum AppPaths {
     /// remains visible when a client is closed, its database is temporarily
     /// locked, or AI Usage Bar itself is restarted.
     static let usageSnapshotCache = appSupport.appendingPathComponent("usage-snapshots.json")
+    static let doubaoWorkScanCache = appSupport.appendingPathComponent("doubao-work-scan-cache.json")
 }

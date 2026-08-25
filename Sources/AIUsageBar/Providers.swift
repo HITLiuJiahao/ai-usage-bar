@@ -12,7 +12,7 @@ enum HTTPJSON {
     ) async throws -> HTTPJSONResult {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 20
+        request.timeoutInterval = 5
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
@@ -34,7 +34,7 @@ enum HTTPJSON {
     ) async throws -> HTTPJSONResult {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 20
+        request.timeoutInterval = 5
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         for (key, value) in headers {
