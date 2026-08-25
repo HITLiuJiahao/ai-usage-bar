@@ -4,6 +4,9 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     case codex
     case chatGPT
     case qwenWork
+    case zcode
+    case openCode
+    case doubaoWork
     case qianwenOffice
     case deepSeekHarness
     case workBuddy
@@ -13,8 +16,8 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
 
     // Keep the dashboard order stable for the two-column layout.
     static let trackedCases: [ProviderID] = [
-        .codex, .qwenWork, .qianwenOffice,
-        .workBuddy, .deepSeekHarness,
+        .codex, .qwenWork, .zcode, .doubaoWork,
+        .workBuddy,
         .miniMax
     ]
 
@@ -23,6 +26,9 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .codex: return "Codex"
         case .chatGPT: return "ChatGPT"
         case .qwenWork: return "QwenWork"
+        case .zcode: return "ZCode"
+        case .openCode: return "OpenCode"
+        case .doubaoWork: return "豆包工作"
         case .qianwenOffice: return "千问办公模式"
         case .deepSeekHarness: return "DeepSeek Harness"
         case .workBuddy: return "WorkBuddy"
@@ -35,6 +41,9 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .codex: return "Codex"
         case .chatGPT: return "ChatGPT"
         case .qwenWork: return "QwenWork"
+        case .zcode: return "ZCode"
+        case .openCode: return "OpenCode"
+        case .doubaoWork: return "豆包工作"
         case .qianwenOffice: return "Qwen Office"
         case .deepSeekHarness: return "DeepSeek"
         case .workBuddy: return "WorkBuddy"
@@ -47,6 +56,9 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         case .codex: return "terminal"
         case .chatGPT: return "bubble.left.and.bubble.right"
         case .qwenWork: return "sparkles"
+        case .zcode: return "chevron.left.forwardslash.chevron.right"
+        case .openCode: return "terminal.fill"
+        case .doubaoWork: return "briefcase.fill"
         case .qianwenOffice: return "briefcase.fill"
         case .deepSeekHarness: return "brain.head.profile"
         case .workBuddy: return "person.2.wave.2"
@@ -55,21 +67,23 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum ProviderState {
+enum ProviderState: Codable {
     case connected
     case partial
+    case cached
     case unavailable
 
     var title: String {
         switch self {
         case .connected: return "已连接"
         case .partial: return "部分可用"
+        case .cached: return "历史数据"
         case .unavailable: return "暂不可用"
         }
     }
 }
 
-enum DataSource {
+enum DataSource: Codable {
     case server
     case local
     case cached
@@ -85,7 +99,7 @@ enum DataSource {
     }
 }
 
-enum MetricKind {
+enum MetricKind: Codable {
     case tokens
     case requests
     case duration
@@ -94,7 +108,7 @@ enum MetricKind {
     case quota
 }
 
-enum UsageWindow: String {
+enum UsageWindow: String, Codable {
     case today
     case yesterday
     case fiveHours
@@ -122,7 +136,7 @@ enum UsageWindow: String {
     }
 }
 
-struct UsageMetric: Identifiable {
+struct UsageMetric: Identifiable, Codable {
     let key: String
     let title: String
     let kind: MetricKind
@@ -204,7 +218,7 @@ struct UsageMetric: Identifiable {
     }
 }
 
-struct ModelUsage: Identifiable {
+struct ModelUsage: Identifiable, Codable {
     let name: String
     let window: UsageWindow
     var tokens = TokenBreakdown()
@@ -257,7 +271,7 @@ struct ModelUsage: Identifiable {
     }
 }
 
-struct AccountUsageSnapshot: Identifiable {
+struct AccountUsageSnapshot: Identifiable, Codable {
     let id: String
     let provider: ProviderID
     let accountName: String
@@ -294,7 +308,7 @@ struct AccountUsageSnapshot: Identifiable {
     }
 }
 
-struct ProviderSnapshot: Identifiable {
+struct ProviderSnapshot: Identifiable, Codable {
     let provider: ProviderID
     let accounts: [AccountUsageSnapshot]
     let state: ProviderState

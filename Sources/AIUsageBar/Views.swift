@@ -275,6 +275,7 @@ struct StatusPill: View {
         switch state {
         case .connected: return .green
         case .partial: return .orange
+        case .cached: return .purple
         case .unavailable: return .secondary
         }
     }
@@ -308,6 +309,9 @@ enum ProviderPalette {
         case .codex: return .green
         case .chatGPT: return .teal
         case .qwenWork: return .blue
+        case .zcode: return .cyan
+        case .openCode: return .gray
+        case .doubaoWork: return .orange
         case .qianwenOffice: return .cyan
         case .deepSeekHarness: return .pink
         case .workBuddy: return .indigo

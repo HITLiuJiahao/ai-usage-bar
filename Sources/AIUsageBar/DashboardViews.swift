@@ -286,7 +286,7 @@ struct DashboardPopover: View {
                         .font(.system(size: 23, weight: .bold, design: .rounded))
                     DashboardRefreshButton(store: store)
                 }
-                Text("Codex · MiniMax Code · WorkBuddy · DeepSeek Harness · QwenWork · 千问办公模式 · Token、模型与用量")
+                Text("Codex · ZCode · 豆包工作 · MiniMax Code · WorkBuddy · QwenWork · Token、模型与用量")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
             }
@@ -428,7 +428,7 @@ private struct DashboardProviderCard: View {
         let candidates = account.metrics.filter { $0.kind == .quota }
         let preferredWindows: [UsageWindow]
         switch snapshot.provider {
-        case .codex, .miniMax, .chatGPT:
+        case .codex, .miniMax, .chatGPT, .zcode, .openCode, .doubaoWork:
             preferredWindows = [.weekly, .fiveHours, .billing]
         case .workBuddy:
             preferredWindows = [.monthly, .billing, .weekly]
@@ -836,13 +836,18 @@ private struct DashboardProviderCard: View {
         if snapshot.accounts.count > 1 {
             return "\(snapshot.accounts.count) 账户"
         }
-        return snapshot.state == .connected ? "OK" : "—"
+        switch snapshot.state {
+        case .connected: return "OK"
+        case .cached: return "历史"
+        case .partial, .unavailable: return "—"
+        }
     }
 
     private var statusSymbol: String {
         switch snapshot.state {
         case .connected: return "checkmark.circle.fill"
         case .partial: return "exclamationmark.circle.fill"
+        case .cached: return "clock.fill"
         case .unavailable: return "minus.circle"
         }
     }
@@ -851,6 +856,7 @@ private struct DashboardProviderCard: View {
         switch snapshot.state {
         case .connected: return DashboardPalette.success
         case .partial: return DashboardPalette.warning
+        case .cached: return .purple
         case .unavailable: return .white.opacity(0.32)
         }
     }
@@ -862,6 +868,7 @@ private struct DashboardProviderCard: View {
         switch snapshot.state {
         case .connected: return "数据已正常读取"
         case .partial: return "部分数据可用"
+        case .cached: return "目标应用当前未运行，显示最近一次成功读取的历史用量"
         case .unavailable: return "暂未读取到数据"
         }
     }
@@ -1206,6 +1213,9 @@ private enum DashboardPalette {
         case .codex: return Color(red: 0.45, green: 0.78, blue: 1.0)
         case .chatGPT: return Color(red: 0.35, green: 0.82, blue: 0.72)
         case .qwenWork: return Color(red: 0.42, green: 0.69, blue: 1.0)
+        case .zcode: return Color(red: 0.34, green: 0.78, blue: 0.92)
+        case .openCode: return Color(red: 0.72, green: 0.76, blue: 0.88)
+        case .doubaoWork: return Color(red: 0.98, green: 0.47, blue: 0.30)
         case .qianwenOffice: return Color(red: 0.33, green: 0.80, blue: 0.88)
         case .deepSeekHarness: return Color(red: 0.86, green: 0.48, blue: 0.72)
         case .workBuddy: return Color(red: 0.43, green: 0.84, blue: 0.75)

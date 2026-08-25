@@ -52,6 +52,65 @@ enum AppPaths {
     ]
     static let qwenDatabase = qwenRoot.appendingPathComponent("data/agents.db")
 
+    /// ZCode stores its local App Usage ledger in the CLI data directory.
+    /// The desktop app and its bundled CLI share this SQLite database.
+    static let zcodeRoot = home.appendingPathComponent(".zcode", isDirectory: true)
+    static let zcodeDatabaseCandidates = [
+        zcodeRoot
+            .appendingPathComponent("cli", isDirectory: true)
+            .appendingPathComponent("db", isDirectory: true)
+            .appendingPathComponent("db.sqlite"),
+        zcodeRoot
+            .appendingPathComponent("v2", isDirectory: true)
+            .appendingPathComponent("db", isDirectory: true)
+            .appendingPathComponent("db.sqlite"),
+        home
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("ZCode", isDirectory: true)
+            .appendingPathComponent("db.sqlite")
+    ]
+
+    /// OpenCode stores its message ledger in an SQLite database. The
+    /// XDG path is the default used by the official CLI; the Application
+    /// Support and config paths cover macOS installations that override it.
+    static var openCodeDatabaseCandidates: [URL] {
+        var roots: [URL] = []
+        if let xdgDataHome = ProcessInfo.processInfo.environment["XDG_DATA_HOME"],
+           !xdgDataHome.isEmpty {
+            roots.append(URL(fileURLWithPath: xdgDataHome, isDirectory: true))
+        }
+        roots.append(contentsOf: [
+            home
+                .appendingPathComponent(".local", isDirectory: true)
+                .appendingPathComponent("share", isDirectory: true),
+            home
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Application Support", isDirectory: true),
+            home.appendingPathComponent(".config", isDirectory: true)
+        ])
+
+        var seen: Set<String> = []
+        return roots.compactMap { root in
+            let directory = root.appendingPathComponent("opencode", isDirectory: true)
+            guard seen.insert(directory.path).inserted else { return nil }
+            return directory.appendingPathComponent("opencode.db")
+        }
+    }
+
+    /// Doubao Work keeps its local network-event ledger in the Tea LevelDB
+    /// store and mirrors recent events in the SDK log directory.
+    static let doubaoWorkRoot = home
+        .appendingPathComponent("Library", isDirectory: true)
+        .appendingPathComponent("Application Support", isDirectory: true)
+        .appendingPathComponent("DoubaoWork", isDirectory: true)
+    static let doubaoWorkTeaDatabase = doubaoWorkRoot
+        .appendingPathComponent("Tea", isDirectory: true)
+        .appendingPathComponent("tea.db", isDirectory: true)
+    static let doubaoWorkSDKLogs = doubaoWorkRoot
+        .appendingPathComponent("sdk_storage", isDirectory: true)
+        .appendingPathComponent("log", isDirectory: true)
+
     static let deepSeekHarnessRoot = home.appendingPathComponent(".dsh", isDirectory: true)
     static let deepSeekHarnessSessions = deepSeekHarnessRoot
         .appendingPathComponent("sessions", isDirectory: true)
@@ -86,4 +145,9 @@ enum AppPaths {
         .appendingPathComponent("Library", isDirectory: true)
         .appendingPathComponent("Application Support", isDirectory: true)
         .appendingPathComponent("AIUsageBar", isDirectory: true)
+
+    /// The last successful provider snapshots are kept here so local usage
+    /// remains visible when a client is closed, its database is temporarily
+    /// locked, or AI Usage Bar itself is restarted.
+    static let usageSnapshotCache = appSupport.appendingPathComponent("usage-snapshots.json")
 }

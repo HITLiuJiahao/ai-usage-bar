@@ -16,6 +16,12 @@ final class UsageStore: ObservableObject {
     private var retryCount = 0
 
     init() {
+        if let cachedSnapshots = UsageSnapshotCache.load() {
+            snapshots = ProviderID.trackedCases.map { provider in
+                cachedSnapshots.first(where: { $0.provider == provider })
+                    ?? ProviderSnapshot.empty(for: provider)
+            }
+        }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.refresh()
@@ -96,18 +102,19 @@ final class UsageStore: ObservableObject {
                     continue
                 }
 
-                // Keep the last usable result when a transient endpoint
-                // failure returns an empty unavailable snapshot, just as
-                // Tokei keeps its last successful usage while retrying.
+                // Keep the last usable result when a local source is empty or
+                // temporarily unavailable. Closing a client must not erase
+                // the historical usage already shown by the dashboard.
                 let previous = snapshots[index]
-                if snapshot.state == .unavailable,
-                   previous.state != .unavailable,
-                   previous.metricCount > 0 {
+                if previous.metricCount > 0,
+                   (snapshot.metricCount == 0 || snapshot.state == .unavailable) {
                     continue
                 }
                 snapshots[index] = snapshot
             }
         }
+
+        UsageSnapshotCache.save(snapshots)
 
         let hasUsableData = snapshots.contains { snapshot in
             snapshot.state != .unavailable && snapshot.metricCount > 0

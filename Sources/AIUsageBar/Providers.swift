@@ -528,9 +528,9 @@ enum ProviderRegistry {
     static let all: [any UsageProvider] = [
         CodexProvider(),
         QwenWorkProvider(),
-        QianwenOfficeProvider(),
+        ZCodeProvider(),
+        DoubaoWorkProvider(),
         WorkBuddyProvider(),
-        DeepSeekHarnessProvider(),
         MiniMaxProvider()
     ]
 }
@@ -587,6 +587,135 @@ enum SnapshotFactory {
             return value
         }
         return values.isEmpty ? nil : values.joined(separator: "\n")
+    }
+}
+
+struct ZCodeProvider: UsageProvider {
+    let id: ProviderID = .zcode
+
+    func fetch() async -> ProviderSnapshot {
+        let scan = await Task.detached(priority: .utility) {
+            ZCodeUsageScanner.scan()
+        }.value
+        let metrics = UsageMetrics.localMetrics(
+            summary: scan.summary,
+            includeMoney: true
+        )
+
+        let state: ProviderState
+        if scan.responseCount > 0 {
+            state = .connected
+        } else if scan.hasDatabase {
+            state = .partial
+        } else {
+            state = .unavailable
+        }
+
+        var message: String
+        if scan.responseCount > 0 {
+            message = "Token、模型、会话和请求来自 ZCode 本机 SQLite 的 model_usage 表；input_tokens 按 ZCode 的完整 prompt 总量处理，缓存读取单独用于命中率和成本估算。成本优先使用 ~/.tokei 价格表，未匹配模型不会强行估价。"
+            if !scan.unpricedModels.isEmpty {
+                message += "\n以下模型未匹配到价格，仅计入 Token，不计入成本：\(scan.unpricedModels.joined(separator: ", "))。"
+            }
+        } else if scan.hasDatabase {
+            message = "已找到 ZCode 本机用量数据库，但暂未识别到有 Token 的模型调用。"
+        } else {
+            message = "未找到 ZCode 本机用量数据库（~/.zcode/cli/db/db.sqlite）。请先启动并使用 ZCode。"
+        }
+
+        return SnapshotFactory.make(
+            provider: id,
+            accountName: scan.latestModel.map { "ZCode · \($0)" } ?? "本机活动账户",
+            state: state,
+            metrics: metrics,
+            message: message,
+            source: scan.responseCount > 0 ? .local : .unavailable,
+            modelUsages: UsageMetrics.modelUsages(summary: scan.summary)
+        )
+    }
+}
+
+struct OpenCodeProvider: UsageProvider {
+    let id: ProviderID = .openCode
+
+    func fetch() async -> ProviderSnapshot {
+        let scan = await Task.detached(priority: .utility) {
+            OpenCodeUsageScanner.scan()
+        }.value
+        let metrics = UsageMetrics.localMetrics(
+            summary: scan.summary,
+            includeMoney: true
+        )
+
+        let state: ProviderState
+        if scan.responseCount > 0 {
+            state = .connected
+        } else if scan.hasDatabase {
+            state = .partial
+        } else {
+            state = .unavailable
+        }
+
+        var message: String
+        if scan.responseCount > 0 {
+            message = "Token、模型、缓存、请求和会话来自 OpenCode 本机 SQLite 的 message 表；缓存读取/写入作为独立输入项统计，成本优先使用消息内记录或本机价格表。"
+            if !scan.unpricedModels.isEmpty {
+                message += "\n以下模型未匹配到价格，仅计入 Token，不计入成本：\(scan.unpricedModels.joined(separator: ", "))。"
+            }
+        } else if scan.hasDatabase {
+            message = "已找到 OpenCode 本机用量数据库，但暂未识别到有 Token 的 assistant 消息。"
+        } else {
+            message = "未找到 OpenCode 本机用量数据库（~/.local/share/opencode/opencode.db）。请先启动并使用 OpenCode。"
+        }
+
+        return SnapshotFactory.make(
+            provider: id,
+            accountName: scan.latestModel.map { "OpenCode · \($0)" } ?? "本机活动账户",
+            state: state,
+            metrics: metrics,
+            message: message,
+            source: scan.responseCount > 0 ? .local : .unavailable,
+            modelUsages: UsageMetrics.modelUsages(summary: scan.summary)
+        )
+    }
+}
+
+struct DoubaoWorkProvider: UsageProvider {
+    let id: ProviderID = .doubaoWork
+
+    func fetch() async -> ProviderSnapshot {
+        let scan = await Task.detached(priority: .utility) {
+            DoubaoWorkUsageScanner.scan()
+        }.value
+        let metrics = UsageMetrics.localMetrics(summary: scan.summary)
+        let hasRoot = FileManager.default.fileExists(atPath: AppPaths.doubaoWorkRoot.path)
+
+        let state: ProviderState
+        if scan.responseCount > 0 {
+            state = .connected
+        } else if hasRoot || scan.hasLogFiles {
+            state = .partial
+        } else {
+            state = .unavailable
+        }
+
+        let message: String
+        if scan.responseCount > 0 {
+            message = "请求次数来自豆包工作本机的 Tea/tea.db 与 sdk_storage/log 网络事件；仅统计 /chat/completion 和 /samantha/chat/completion，并对重复日志去重。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
+        } else if hasRoot || scan.hasLogFiles {
+            message = "已找到豆包工作本机日志，但暂未识别到工作模式模型完成请求（/chat/completion 或 /samantha/chat/completion）。"
+        } else {
+            message = "未找到豆包工作本机日志（~/Library/Application Support/DoubaoWork）。请先启动并使用豆包工作。"
+        }
+
+        return SnapshotFactory.make(
+            provider: id,
+            accountName: "豆包工作 · 工作模式",
+            state: state,
+            metrics: metrics,
+            message: message,
+            source: scan.responseCount > 0 ? .local : .unavailable
+        )
     }
 }
 

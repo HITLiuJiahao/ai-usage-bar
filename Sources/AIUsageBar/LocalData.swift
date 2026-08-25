@@ -1,6 +1,6 @@
 import Foundation
 
-struct TokenBreakdown {
+struct TokenBreakdown: Codable {
     var input: Double = 0
     var output: Double = 0
     var total: Double = 0

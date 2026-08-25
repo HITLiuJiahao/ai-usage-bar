@@ -71,7 +71,13 @@ enum CodexPricing {
         "qwen3.8-max-preview": Price(input: 2.0, output: 6.0, cacheRead: 0.25, cacheWrite: 2.50),
         "deepseek-v4-flash": Price(input: 0.14, output: 0.28, cacheRead: 0.0028),
         "deepseek-v4-flash-0731": Price(input: 0.14, output: 0.28, cacheRead: 0.0028),
-        "glm-5.2": Price(input: 1.40, output: 4.40, cacheRead: 0.26)
+        "glm-5.2": Price(input: 1.40, output: 4.40, cacheRead: 0.26),
+        // OpenCode-hosted free models. These are explicit zero-cost entries
+        // so the dashboard does not incorrectly label them as unpriced.
+        "qwen3-coder": Price(input: 0, output: 0, cacheRead: 0),
+        "glm-4.7-free": Price(input: 0, output: 0, cacheRead: 0),
+        "minimax-m2.1-free": Price(input: 0, output: 0, cacheRead: 0),
+        "x-preview-f-free": Price(input: 0, output: 0, cacheRead: 0)
     ]
 
     private static let pricingStore: (models: [String: Price], aliases: [String: String]) = {
