@@ -36,6 +36,15 @@ private enum DashboardPeriod: String, CaseIterable, Identifiable {
         }
     }
 
+    var isLongRange: Bool {
+        switch self {
+        case .lastWeek, .lastMonth, .thisYear:
+            return true
+        case .today, .yesterday, .thisWeek, .thisMonth:
+            return false
+        }
+    }
+
     func hasUsage(in account: AccountUsageSnapshot) -> Bool {
         account.metrics
             .filter { preferredWindows.contains($0.window) }
@@ -58,6 +67,8 @@ private enum DashboardMotion {
         dampingFraction: 0.90,
         blendDuration: 0.05
     )
+
+    static let longRangeContent = Animation.easeInOut(duration: 0.30)
 }
 
 enum DashboardLayout {
@@ -130,6 +141,7 @@ struct DashboardPopover: View {
     let onSizeChange: (CGSize) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var period: DashboardPeriod = .today
+    @State private var periodTransitionIsLongRange = false
     @State private var measuredCardHeights: [String: CGFloat] = [:]
     @Namespace private var periodSelectionNamespace
 
@@ -175,7 +187,11 @@ struct DashboardPopover: View {
                             }
                         }
                         .animation(
-                            reduceMotion ? nil : DashboardMotion.periodContent,
+                            reduceMotion
+                                ? nil
+                                : (periodTransitionIsLongRange
+                                    ? DashboardMotion.longRangeContent
+                                    : DashboardMotion.periodContent),
                             value: period
                         )
                     }
@@ -201,11 +217,9 @@ struct DashboardPopover: View {
             reportDashboardSize()
         }
         .onChange(of: visibleSnapshots.count) { _ in
-            measuredCardHeights = [:]
             reportDashboardSize()
         }
         .onChange(of: period) { _ in
-            measuredCardHeights = [:]
             reportDashboardSize()
         }
         .onPreferenceChange(DashboardCardHeightPreferenceKey.self) { heights in
@@ -287,7 +301,6 @@ struct DashboardPopover: View {
                     DashboardRefreshButton(store: store)
                 }
                 Text("Codex · ZCode · 豆包工作 · MiniMax Code · WorkBuddy · QwenWork · Token、模型与用量")
-                Text("Codex · ZCode · OpenCode · MiniMax Code · WorkBuddy · QwenWork · Token、模型与用量")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
             }
@@ -320,10 +333,13 @@ struct DashboardPopover: View {
             ForEach(DashboardPeriod.allCases) { value in
                 Button {
                     guard period != value else { return }
+                    let isLongRangeTransition = period.isLongRange || value.isLongRange
                     if reduceMotion {
+                        periodTransitionIsLongRange = false
                         period = value
                     } else {
                         withAnimation(DashboardMotion.periodSelection) {
+                            periodTransitionIsLongRange = isLongRangeTransition
                             period = value
                         }
                     }
@@ -361,6 +377,9 @@ struct DashboardPopover: View {
 
     private var providerCardTransition: AnyTransition {
         guard !reduceMotion else { return .opacity }
+        if periodTransitionIsLongRange {
+            return .opacity
+        }
         return .asymmetric(
             insertion: .opacity.combined(with: .scale(scale: 0.985, anchor: .center)),
             removal: .opacity

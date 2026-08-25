@@ -113,16 +113,21 @@ final class StatusBarController: NSObject, ObservableObject {
             let widthChanged = abs(currentSize.width - contentSize.width) > 0.5
             let heightChanged = abs(currentSize.height - contentSize.height) > 0.5
             if widthChanged || heightChanged {
-                self.dashboardPanel.setContentSize(contentSize)
-            }
-
-            if self.dashboardPanel.isVisible {
+                if self.dashboardPanel.isVisible {
+                    self.positionDashboardPanel(contentSize: contentSize, animated: true)
+                } else {
+                    self.dashboardPanel.setContentSize(contentSize)
+                }
+            } else if self.dashboardPanel.isVisible {
                 self.positionDashboardPanel()
             }
         }
     }
 
-    private func positionDashboardPanel() {
+    private func positionDashboardPanel(
+        contentSize: NSSize? = nil,
+        animated: Bool = false
+    ) {
         guard let screen = statusItem?.button?.window?.screen
                 ?? NSScreen.main
                 ?? NSScreen.screens.first
@@ -140,6 +145,9 @@ final class StatusBarController: NSObject, ObservableObject {
 
         let safeFrame = screen.visibleFrame.insetBy(dx: 12, dy: 12)
         var frame = dashboardPanel.frame
+        if let contentSize {
+            frame.size = contentSize
+        }
         guard frame.width > 0, frame.height > 0 else { return }
 
         // Use the screen center instead of the status-item anchor. The old
@@ -156,7 +164,14 @@ final class StatusBarController: NSObject, ObservableObject {
         let maximumY = max(safeFrame.minY, safeFrame.maxY - frame.height)
         frame.origin.x = min(max(targetX, safeFrame.minX), maximumX)
         frame.origin.y = min(max(targetY, safeFrame.minY), maximumY)
-        dashboardPanel.setFrame(frame, display: true)
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.28
+                dashboardPanel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            dashboardPanel.setFrame(frame, display: true)
+        }
     }
 
     private func configureContextMenu() {
