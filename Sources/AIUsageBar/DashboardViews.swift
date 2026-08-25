@@ -287,6 +287,7 @@ struct DashboardPopover: View {
                     DashboardRefreshButton(store: store)
                 }
                 Text("Codex · ZCode · 豆包工作 · MiniMax Code · WorkBuddy · QwenWork · Token、模型与用量")
+                Text("Codex · ZCode · OpenCode · MiniMax Code · WorkBuddy · QwenWork · Token、模型与用量")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
             }

@@ -530,6 +530,7 @@ enum ProviderRegistry {
         QwenWorkProvider(),
         ZCodeProvider(),
         DoubaoWorkProvider(),
+        OpenCodeProvider(),
         WorkBuddyProvider(),
         MiniMaxProvider()
     ]
