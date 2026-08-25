@@ -17,7 +17,6 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     // Keep the dashboard order stable for the two-column layout.
     static let trackedCases: [ProviderID] = [
         .codex, .qwenWork, .zcode, .doubaoWork,
-        .codex, .qwenWork, .zcode, .openCode,
         .workBuddy,
         .miniMax
     ]

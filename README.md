@@ -17,7 +17,6 @@ Download the latest Apple Silicon (`arm64`) ZIP directly: [AIUsageBar-arm64-rele
 - Runs in the macOS menu bar. Click the icon to open the dashboard; right-click for refresh, settings, and quit actions.
 - Supports seven time ranges: today, yesterday, this week, last week, this month, last month, and this year.
 - Distinguishes the standalone QwenWork client from ZCode and Doubao Work local usage records. OpenCode, Qianwen Office Mode, and DeepSeek Harness monitoring are temporarily disabled.
-- Distinguishes the standalone QwenWork client from ZCode and OpenCode local usage records. Qianwen Office Mode and DeepSeek Harness monitoring are temporarily disabled.
 - Uses a two-column card layout and adjusts its height based on the number of available providers. Click **By Model** to expand model-level details.
 - Displays tokens, input, output, cache reads, cache-hit rate, reasoning tokens, request counts, Credits, subscription windows, and estimated costs.
 - Refreshes automatically when the dashboard opens, on a background timer, or manually from the refresh control at the top.
@@ -35,7 +34,6 @@ Download the latest Apple Silicon (`arm64`) ZIP directly: [AIUsageBar-arm64-rele
 | ZCode | `~/.zcode/cli/db/db.sqlite` (`model_usage`) | — | Tokens, input/output/cache reads, reasoning, requests, sessions, models, and price-based cost estimates |
 | Doubao Work | `~/Library/Application Support/DoubaoWork/Tea/tea.db` and `sdk_storage/log` (`net_report_dev`) | — | Work-mode completion requests and activity; token and cost fields are not exposed by the local logs |
 | OpenCode | — (temporarily disabled) | — | The adapter remains in the source tree but is not scanned or displayed |
-| OpenCode | `~/.local/share/opencode/opencode.db` (`message`) | — | Assistant responses, input/output/cache reads/writes, reasoning, sessions, models, and estimated cost |
 | Qianwen Office Mode | — (temporarily disabled) | — | The adapter remains in the source tree but is not scanned or displayed |
 | WorkBuddy | JSONL files under `~/.workbuddy/projects` and `~/.workbuddy/logs` | Local account information | Tokens, input/output, cache hits, reasoning, Credits, models, requests, and estimated cost; every JSONL record containing `providerData.rawUsage`, including `function_call` records, counts as one model call |
 | DeepSeek Harness | — (temporarily disabled) | — | The adapter remains in the source tree but is not scanned or displayed |
@@ -86,10 +84,6 @@ Special cases:
 - QwenWork Credits/plan quotas retain their original units. Subscription Credits are not presented as API costs.
 - Qianwen Office Mode pricing support remains in the source tree for a future re-enable, but its scanner is currently disabled.
 - Doubao Work request counts are read from local `net_report_dev` events for `/chat/completion` and `/samantha/chat/completion`. The current local event payload does not expose reliable input/output token fields, so Token and cost are left unavailable instead of estimated from byte sizes.
-- OpenCode reads assistant messages from its local `opencode.db` SQLite database. Its `tokens.input` excludes cache reads, so the dashboard keeps cache reads/writes separate and includes them in the total prompt-token denominator and cost estimate.
-- MiniMax Code estimates cost from local model usage and MiniMax's official token prices. Actual Token Plan deductions are determined by MiniMax's server-side quota.
-- QwenWork Credits/plan quotas retain their original units. Subscription Credits are not presented as API costs.
-- Qianwen Office Mode pricing support remains in the source tree for a future re-enable, but its scanner is currently disabled.
 
 ## Privacy and Security
 
@@ -175,7 +169,6 @@ Click the gear icon in the upper-right corner of the dashboard, or right-click t
 │   ├── ZCodeUsage.swift               # ZCode local SQLite model usage aggregation
 │   ├── OpenCodeUsage.swift            # OpenCode adapter retained but temporarily disabled
 │   ├── DoubaoWorkUsage.swift          # Doubao Work local completion-event aggregation
-│   ├── OpenCodeUsage.swift            # OpenCode local SQLite message aggregation
 │   ├── QianwenOfficeUsage.swift       # Main Qianwen Office Mode adapter (disabled)
 │   ├── WorkBuddyUsage.swift          # WorkBuddy JSONL and Credits-ledger aggregation
 │   ├── DeepSeekHarnessUsage.swift     # DeepSeek Harness adapter (disabled)
@@ -207,7 +200,6 @@ If the first full read fails, the app retries automatically. When an individual 
 - ZCode local App Usage is read from the `model_usage` table. Remote Z.ai/BigModel Coding Plan quota data is not read by this adapter.
 - OpenCode monitoring is temporarily disabled; its local adapter is retained for a future re-enable.
 - Doubao Work monitoring reads only the local completion-event ledger under `~/Library/Application Support/DoubaoWork`; it does not read prompts, request bodies, or byte sizes as token estimates.
-- OpenCode local usage is read from `message.data` in the first available `opencode.db` under `XDG_DATA_HOME`, `~/.local/share`, `~/Library/Application Support`, or `~/.config`. Remote provider quotas are not read by this adapter.
 - DeepSeek Harness monitoring is temporarily disabled; its compressed-log adapter is retained for a future re-enable.
 - Server-side subscription quotas may lag behind local session logs; the dashboard labels the sources separately.
 - Before a public release, add formal app signing, notarization, release packages, and a license.
