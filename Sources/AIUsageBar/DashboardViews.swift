@@ -417,7 +417,7 @@ struct DashboardPopover: View {
     }
 }
 
-private struct BalancePresentation {
+private struct BalancePresentation: Identifiable {
     let metric: UsageMetric
     let title: String
     let valueText: String
@@ -425,6 +425,8 @@ private struct BalancePresentation {
     let remainingFraction: Double?
     let resetAt: Date?
     let planName: String?
+
+    var id: String { metric.id }
 }
 
 private struct DashboardProviderCard: View {
@@ -444,11 +446,16 @@ private struct DashboardProviderCard: View {
         account.metrics.filter { period.preferredWindows.contains($0.window) }
     }
 
-    private var balanceMetric: UsageMetric? {
+    private var balanceMetrics: [UsageMetric] {
         let candidates = account.metrics.filter { $0.kind == .quota }
         let preferredWindows: [UsageWindow]
         switch snapshot.provider {
-        case .codex, .miniMax, .chatGPT, .zcode, .openCode, .doubaoWork:
+        case .codex:
+            // Codex has two independent subscription windows. Keep both
+            // visible so the restored five-hour allowance is not hidden by
+            // the weekly window.
+            preferredWindows = [.fiveHours, .weekly, .billing]
+        case .miniMax, .chatGPT, .zcode, .openCode, .doubaoWork:
             preferredWindows = [.weekly, .fiveHours, .billing]
         case .workBuddy:
             preferredWindows = [.monthly, .billing, .weekly]
@@ -460,6 +467,7 @@ private struct DashboardProviderCard: View {
             preferredWindows = [.billing, .monthly, .weekly]
         }
 
+        var selected: [UsageMetric] = []
         for window in preferredWindows {
             let matches = candidates
                 .filter { $0.window == window }
@@ -470,14 +478,22 @@ private struct DashboardProviderCard: View {
                     if lhsAggregate != rhsAggregate { return lhsAggregate }
                     return lhs.key < rhs.key
                 }
-            if let match = matches.first { return match }
+            if snapshot.provider == .codex {
+                selected.append(contentsOf: matches.filter { candidate in
+                    !selected.contains(where: { $0.id == candidate.id })
+                })
+            } else if let match = matches.first {
+                return [match]
+            }
         }
-        return candidates.first
+        return selected.isEmpty ? candidates.first.map { [$0] } ?? [] : selected
     }
 
-    private var balancePresentation: BalancePresentation? {
-        guard let metric = balanceMetric else { return nil }
+    private var balancePresentations: [BalancePresentation] {
+        balanceMetrics.map(balancePresentation(for:))
+    }
 
+    private func balancePresentation(for metric: UsageMetric) -> BalancePresentation {
         let remainingFraction: Double?
         if let remaining = metric.remaining, let limit = metric.limit, limit > 0 {
             remainingFraction = min(max(remaining / limit, 0), 1)
@@ -645,39 +661,43 @@ private struct DashboardProviderCard: View {
 
     @ViewBuilder
     private var balanceSection: some View {
-        if let balance = balancePresentation {
+        if !balancePresentations.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Rectangle()
                     .fill(Color.white.opacity(0.10))
                     .frame(height: 1)
 
-                HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Text(balance.title)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.68))
-                    Spacer(minLength: 4)
-                    Text(balance.valueText)
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.92))
-                    if let percentText = balance.percentText, balance.metric.unit != "%" {
-                        Text(percentText)
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .foregroundStyle(DashboardPalette.color(for: snapshot.provider))
-                    }
-                    if let resetAt = balance.resetAt {
-                        Text("·")
-                            .foregroundStyle(.white.opacity(0.28))
-                        Text(resetAt, formatter: Self.balanceDateFormatter)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.55))
-                    }
-                }
+                ForEach(balancePresentations) { balance in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            Text(balance.title)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.68))
+                            Spacer(minLength: 4)
+                            Text(balance.valueText)
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.92))
+                            if let percentText = balance.percentText, balance.metric.unit != "%" {
+                                Text(percentText)
+                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .foregroundStyle(DashboardPalette.color(for: snapshot.provider))
+                            }
+                            if let resetAt = balance.resetAt {
+                                Text("·")
+                                    .foregroundStyle(.white.opacity(0.28))
+                                Text(resetAt, formatter: Self.balanceDateFormatter)
+                                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.55))
+                            }
+                        }
 
-                if let remainingFraction = balance.remainingFraction {
-                    ProgressView(value: remainingFraction, total: 1)
-                        .progressViewStyle(.linear)
-                        .tint(DashboardPalette.color(for: snapshot.provider))
-                        .scaleEffect(x: 1, y: 0.72, anchor: .center)
+                        if let remainingFraction = balance.remainingFraction {
+                            ProgressView(value: remainingFraction, total: 1)
+                                .progressViewStyle(.linear)
+                                .tint(DashboardPalette.color(for: snapshot.provider))
+                                .scaleEffect(x: 1, y: 0.72, anchor: .center)
+                        }
+                    }
                 }
 
                 HStack {
@@ -685,7 +705,7 @@ private struct DashboardProviderCard: View {
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.52))
                     Spacer(minLength: 4)
-                    Text(balance.planName ?? "—")
+                    Text(balancePresentations.first?.planName ?? "—")
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.88))
                         .padding(.horizontal, 9)
