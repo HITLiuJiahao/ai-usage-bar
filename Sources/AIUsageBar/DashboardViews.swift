@@ -13,15 +13,7 @@ private enum DashboardPeriod: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     var title: String {
-        switch self {
-        case .today: return "今日"
-        case .yesterday: return "昨日"
-        case .thisWeek: return "本周"
-        case .lastWeek: return "上周"
-        case .thisMonth: return "本月"
-        case .lastMonth: return "上月"
-        case .thisYear: return "本年"
-        }
+        L10n.periodTitle(rawValue)
     }
 
     var preferredWindows: [UsageWindow] {
@@ -78,6 +70,9 @@ enum DashboardLayout {
     // never disagree about their coordinate space.
     static let width: CGFloat = referenceWidth
     static let scale: CGFloat = 1
+    // Keep the overview compact when more providers have activity in the
+    // selected period. Additional cards remain in the scrollable grid.
+    static let maximumVisibleModuleCount = 6
     // The balance row is part of the collapsed card, so the minimum row
     // height needs a little extra room beyond the token-only layout.
     static let cardHeight: CGFloat = 240
@@ -85,7 +80,7 @@ enum DashboardLayout {
 
     // Two provider cards share one row. Keep one row as the minimum so an
     // empty or still-loading dashboard does not collapse into a tiny popover.
-    static func contentHeight(forModuleCount count: Int, cardHeights: [CGFloat] = []) -> CGFloat {
+    static func gridHeight(forModuleCount count: Int, cardHeights: [CGFloat] = []) -> CGFloat {
         let rowCount = max(1, (max(count, 0) + 1) / 2)
         var gridHeight: CGFloat = 0
         for row in 0..<rowCount {
@@ -96,6 +91,11 @@ enum DashboardLayout {
             gridHeight += max(cardHeight, max(firstHeight, secondHeight))
         }
         gridHeight += CGFloat(max(rowCount - 1, 0)) * gridSpacing
+        return gridHeight
+    }
+
+    static func contentHeight(forModuleCount count: Int, cardHeights: [CGFloat] = []) -> CGFloat {
+        let gridHeight = gridHeight(forModuleCount: count, cardHeights: cardHeights)
         let outerPadding: CGFloat = 16 * 2
         let headerHeight: CGFloat = 48
         let periodSelectorHeight: CGFloat = 50
@@ -138,6 +138,8 @@ private struct DashboardCardHeightPreferenceKey: PreferenceKey {
 
 struct DashboardPopover: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject private var providerOrder = ProviderOrderStore.shared
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
     let onSizeChange: (CGSize) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var period: DashboardPeriod = .today
@@ -157,12 +159,37 @@ struct DashboardPopover: View {
         ZStack(alignment: .topLeading) {
             DashboardPalette.background
                 .ignoresSafeArea()
+            RadialGradient(
+                colors: [
+                    DashboardPalette.accent.opacity(0.18),
+                    Color.clear
+                ],
+                center: .topLeading,
+                startRadius: 10,
+                endRadius: 420
+            )
+            .blur(radius: 12)
+            .ignoresSafeArea()
+            RadialGradient(
+                colors: [
+                    Color(red: 0.38, green: 0.92, blue: 0.82).opacity(0.12),
+                    Color.clear
+                ],
+                center: .bottomTrailing,
+                startRadius: 10,
+                endRadius: 360
+            )
+            .blur(radius: 18)
+            .ignoresSafeArea()
 
             VStack(alignment: .leading, spacing: 10) {
                 dashboardHeader
                 periodSelector
 
-                ScrollView(.vertical, showsIndicators: false) {
+                ScrollView(
+                    .vertical,
+                    showsIndicators: visibleSnapshots.count > DashboardLayout.maximumVisibleModuleCount
+                ) {
                     ZStack(alignment: .topLeading) {
                         LazyVGrid(
                             columns: [
@@ -196,6 +223,12 @@ struct DashboardPopover: View {
                         )
                     }
                 }
+                .frame(
+                    height: visibleSnapshots.count > DashboardLayout.maximumVisibleModuleCount
+                        ? dashboardGridViewportHeight
+                        : nil,
+                    alignment: .top
+                )
 
             dashboardFooter
         }
@@ -228,7 +261,7 @@ struct DashboardPopover: View {
     }
 
     private var visibleSnapshots: [ProviderSnapshot] {
-        return store.snapshots.filter { snapshot in
+        return providerOrder.orderedSnapshots(store.snapshots).filter { snapshot in
             snapshot.accounts.contains { period.hasUsage(in: $0) }
         }
     }
@@ -246,12 +279,28 @@ struct DashboardPopover: View {
     }
 
     private var dashboardContentHeight: CGFloat {
-        let cardHeights = visibleSnapshots.map {
+        let cardHeights = visibleSnapshots.prefix(DashboardLayout.maximumVisibleModuleCount).map {
             measuredCardHeights[$0.id] ?? DashboardLayout.cardHeight
         }
         return DashboardLayout.contentHeight(
-            forModuleCount: visibleSnapshots.count,
-            cardHeights: cardHeights
+            forModuleCount: min(
+                visibleSnapshots.count,
+                DashboardLayout.maximumVisibleModuleCount
+            ),
+            cardHeights: Array(cardHeights)
+        )
+    }
+
+    private var dashboardGridViewportHeight: CGFloat {
+        let cardHeights = visibleSnapshots
+            .prefix(DashboardLayout.maximumVisibleModuleCount)
+            .map { measuredCardHeights[$0.id] ?? DashboardLayout.cardHeight }
+        return DashboardLayout.gridHeight(
+            forModuleCount: min(
+                visibleSnapshots.count,
+                DashboardLayout.maximumVisibleModuleCount
+            ),
+            cardHeights: Array(cardHeights)
         )
     }
 
@@ -276,7 +325,7 @@ struct DashboardPopover: View {
 
     private var hiddenProviderNames: [String] {
         guard store.lastRefreshAt != nil else { return [] }
-        return store.snapshots
+        return providerOrder.orderedSnapshots(store.snapshots)
             .filter { snapshot in
                 !snapshot.accounts.contains { period.hasUsage(in: $0) }
             }
@@ -293,6 +342,12 @@ struct DashboardPopover: View {
                     .font(.system(size: 25, weight: .medium))
                     .foregroundStyle(DashboardPalette.accent)
             }
+            .frame(width: 48, height: 48)
+            .aiLiquidGlass(
+                tint: DashboardPalette.accent.opacity(0.18),
+                in: Circle(),
+                interactive: true
+            )
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 9) {
@@ -300,7 +355,7 @@ struct DashboardPopover: View {
                         .font(.system(size: 23, weight: .bold, design: .rounded))
                     DashboardRefreshButton(store: store)
                 }
-                Text("Codex · ZCode · 豆包工作 · MiniMax Code · WorkBuddy · QwenWork · Token、模型与用量")
+                Text(L10n.text(.overviewSubtitle, language: languageSettings.language))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.55))
             }
@@ -309,20 +364,28 @@ struct DashboardPopover: View {
 
             VStack(alignment: .trailing, spacing: 2) {
                 if let lastRefreshAt = store.lastRefreshAt {
-                    Text("更新 \(lastRefreshAt, format: .dateTime.hour().minute().second())")
+                    Text("\(L10n.text(.updated, language: languageSettings.language)) \(lastRefreshAt, format: .dateTime.hour().minute().second())")
                         .font(.system(size: 13, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.62))
                 } else {
-                Text("正在读取")
+                Text(L10n.text(.reading, language: languageSettings.language))
                         .font(.system(size: 13, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.62))
                 }
-                Text(store.connectedCount > 0 ? "本机 AI 数据已接入" : "等待本机数据")
+                Text(
+                    L10n.text(
+                        store.connectedCount > 0 ? .localDataConnected : .waitingForData,
+                        language: languageSettings.language
+                    )
+                )
                     .font(.system(size: 12))
                     .foregroundStyle(.white.opacity(0.38))
             }
 
-            DashboardIconButton(symbol: "gearshape", help: "账户设置") {
+            DashboardIconButton(
+                symbol: "gearshape",
+                help: L10n.text(.accountSettings, language: languageSettings.language)
+            ) {
                 SettingsWindowController.shared.show()
             }
         }
@@ -372,7 +435,11 @@ struct DashboardPopover: View {
         }
         .frame(maxWidth: .infinity)
         .padding(5)
-        .background(Color.white.opacity(0.065), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .aiLiquidGlass(
+            tint: Color.white.opacity(0.10),
+            cornerRadius: 16,
+            interactive: true
+        )
     }
 
     private var providerCardTransition: AnyTransition {
@@ -392,21 +459,26 @@ struct DashboardPopover: View {
                 Circle()
                     .fill(DashboardPalette.success)
                     .frame(width: 6, height: 6)
-                Text("每 30 秒自动刷新")
+                Text(L10n.text(.refreshEvery30Seconds, language: languageSettings.language))
                 Text("·")
                     .foregroundStyle(.white.opacity(0.22))
-                Text("Token/额度按实际来源；成本仅对有 Token 与价格表的数据估算")
+                Text(L10n.text(.sourceFootnote, language: languageSettings.language))
                 Spacer()
                 Text(
-                    store.isRefreshing
-                        ? "更新中"
-                        : (store.refreshError == nil ? "本机优先" : "稍后重试")
+                    L10n.text(
+                        store.isRefreshing
+                            ? .updating
+                            : (store.refreshError == nil ? .localFirst : .retryLater),
+                        language: languageSettings.language
+                    )
                 )
                     .foregroundStyle(.white.opacity(0.45))
             }
 
             if !hiddenProviderNames.isEmpty {
-                Text("本时段未检测到使用：\(hiddenProviderNames.joined(separator: " · "))")
+                Text(
+                    "\(L10n.text(.noUsageInPeriod, language: languageSettings.language))：\(hiddenProviderNames.joined(separator: " · "))"
+                )
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.white.opacity(0.34))
                     .lineLimit(2)
@@ -432,6 +504,7 @@ private struct BalancePresentation: Identifiable {
 private struct DashboardProviderCard: View {
     let snapshot: ProviderSnapshot
     let period: DashboardPeriod
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
     @State private var isModelExpanded = false
 
     private var account: AccountUsageSnapshot {
@@ -508,7 +581,7 @@ private struct DashboardProviderCard: View {
         if metric.unit == "%", let remaining = metric.remaining {
             valueText = "\(NumberFormat.compact(remaining))%"
         } else if let remaining = metric.remaining {
-            valueText = "\(NumberFormat.compact(remaining)) \(metric.unit)"
+            valueText = "\(NumberFormat.compact(remaining)) \(L10n.localizedUnit(metric.unit, language: languageSettings.language))"
         } else {
             valueText = "—"
         }
@@ -525,23 +598,7 @@ private struct DashboardProviderCard: View {
     }
 
     private func balanceTitle(for metric: UsageMetric) -> String {
-        if metric.unit.lowercased().contains("credit") {
-            return "Credits 剩余"
-        }
-        switch metric.window {
-        case .weekly, .lastWeek:
-            return "周剩余"
-        case .fiveHours:
-            return "5 小时剩余"
-        case .daily, .today:
-            return "每日剩余"
-        case .billing, .monthly:
-            return "订阅剩余"
-        case .lastMonth:
-            return "上月剩余"
-        default:
-            return "余额"
-        }
+        L10n.balanceTitle(for: metric, language: languageSettings.language)
     }
 
     private func planName(from metric: UsageMetric) -> String? {
@@ -636,24 +693,24 @@ private struct DashboardProviderCard: View {
         [
             DashboardStat(
                 symbol: costUnit == "CNY" ? "yensign.circle" : "dollarsign.circle",
-                title: "成本估算",
+                title: L10n.text(.estimatedCost, language: languageSettings.language),
                 value: costEstimate.map { NumberFormat.currency($0, unit: costUnit) } ?? "—"
             ),
             DashboardStat(
                 symbol: "circle",
-                title: "缓存命中",
+                title: L10n.text(.cacheHit, language: languageSettings.language),
                 value: cacheHitRate.map { "\(Int(($0 * 100).rounded()))%" } ?? "—",
                 usesCacheHitIcon: true,
                 progress: cacheHitRate
             ),
             DashboardStat(
                 symbol: "arrow.down",
-                title: "输入",
+                title: L10n.text(.input, language: languageSettings.language),
                 value: inputTokens.map(NumberFormat.compact) ?? "—"
             ),
             DashboardStat(
                 symbol: "arrow.up",
-                title: "输出",
+                title: L10n.text(.output, language: languageSettings.language),
                 value: outputTokens.map(NumberFormat.compact) ?? "—"
             )
         ]
@@ -670,6 +727,25 @@ private struct DashboardProviderCard: View {
                 ForEach(balancePresentations) { balance in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack(alignment: .firstTextBaseline, spacing: 7) {
+                            if balance.metric.unit.localizedCaseInsensitiveContains("credit") {
+                                Group {
+                                    if snapshot.provider == .workBuddy {
+                                        WorkBuddyCreditsIcon(
+                                            size: 22,
+                                            color: DashboardPalette.color(for: snapshot.provider)
+                                        )
+                                    } else {
+                                        Image(systemName: "circle.dollarsign")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundStyle(DashboardPalette.color(for: snapshot.provider))
+                                    }
+                                }
+                                    .frame(width: 22, height: 22)
+                                    .background(
+                                        DashboardPalette.color(for: snapshot.provider).opacity(0.13),
+                                        in: Circle()
+                                    )
+                            }
                             Text(balance.title)
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(.white.opacity(0.68))
@@ -701,7 +777,7 @@ private struct DashboardProviderCard: View {
                 }
 
                 HStack {
-                    Text("plan")
+                    Text(L10n.text(.plan, language: languageSettings.language))
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(.white.opacity(0.52))
                     Spacer(minLength: 4)
@@ -739,33 +815,20 @@ private struct DashboardProviderCard: View {
             balanceSection
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            DashboardPalette.cardBackground(for: snapshot.provider),
-                            DashboardPalette.cardBackground(for: snapshot.provider).opacity(0.64)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+        .aiLiquidGlass(
+            tint: DashboardPalette.color(for: snapshot.provider).opacity(0.18),
+            cornerRadius: 20
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(DashboardPalette.color(for: snapshot.provider).opacity(0.55), lineWidth: 1.2)
-        )
-        .shadow(color: DashboardPalette.color(for: snapshot.provider).opacity(0.10), radius: 16, y: 6)
     }
 
     private var cardHeader: some View {
         HStack(spacing: 9) {
-            Circle()
-                .fill(DashboardPalette.color(for: snapshot.provider))
-                .frame(width: 11, height: 11)
-                .shadow(color: DashboardPalette.color(for: snapshot.provider), radius: 7)
-            Text(snapshot.provider.displayName)
+            ProviderLogo(
+                provider: snapshot.provider,
+                size: 25,
+                fallbackColor: DashboardPalette.color(for: snapshot.provider)
+            )
+            Text(L10n.providerName(snapshot.provider, language: languageSettings.language))
                 .font(.system(size: 17, weight: .bold, design: .rounded))
                 .lineLimit(1)
             Text(badgeText)
@@ -799,7 +862,7 @@ private struct DashboardProviderCard: View {
                 Text("—")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.55))
-                Text("等待数据")
+                Text(L10n.text(.waitingForData, language: languageSettings.language))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.white.opacity(0.52))
             }
@@ -829,7 +892,7 @@ private struct DashboardProviderCard: View {
                     Image(systemName: "chart.pie.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(DashboardPalette.color(for: snapshot.provider))
-                    Text("按模型 (\(modelUsages.count))")
+                    Text("\(L10n.text(.byModel, language: languageSettings.language)) (\(modelUsages.count))")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.78))
                     Spacer(minLength: 4)
@@ -843,7 +906,7 @@ private struct DashboardProviderCard: View {
 
             if isModelExpanded {
                 if modelUsages.isEmpty {
-                    Text("暂无可识别的模型明细")
+                    Text(L10n.text(.noModelDetails, language: languageSettings.language))
                         .font(.system(size: 11))
                         .foregroundStyle(.white.opacity(0.40))
                         .padding(.horizontal, 10)
@@ -870,15 +933,17 @@ private struct DashboardProviderCard: View {
 
     private var badgeText: String {
         if let requests = requestMetric?.used {
-            let unit = requestMetric?.title.contains("会话") == true ? "会话" : "请求"
+            let unit = requestMetric?.title.contains("会话") == true
+                ? L10n.text(.sessions, language: languageSettings.language)
+                : L10n.text(.requests, language: languageSettings.language)
             return "\(NumberFormat.compact(requests)) \(unit)"
         }
         if snapshot.accounts.count > 1 {
-            return "\(snapshot.accounts.count) 账户"
+            return "\(snapshot.accounts.count) \(L10n.text(.accountUnit, language: languageSettings.language))"
         }
         switch snapshot.state {
         case .connected: return "OK"
-        case .cached: return "历史"
+        case .cached: return L10n.text(.historical, language: languageSettings.language)
         case .partial, .unavailable: return "—"
         }
     }
@@ -906,10 +971,10 @@ private struct DashboardProviderCard: View {
             return message
         }
         switch snapshot.state {
-        case .connected: return "数据已正常读取"
-        case .partial: return "部分数据可用"
-        case .cached: return "目标应用当前未运行，显示最近一次成功读取的历史用量"
-        case .unavailable: return "暂未读取到数据"
+        case .connected: return L10n.text(.dataRead, language: languageSettings.language)
+        case .partial: return L10n.text(.partialData, language: languageSettings.language)
+        case .cached: return L10n.text(.cachedHistory, language: languageSettings.language)
+        case .unavailable: return L10n.text(.noData, language: languageSettings.language)
         }
     }
 
@@ -934,14 +999,11 @@ private struct DashboardProviderCard: View {
     }
 
     private func primaryLabel(_ metric: UsageMetric) -> String {
-        switch metric.kind {
-        case .tokens: return "\(period.title)总量"
-        case .requests: return "\(period.title)请求"
-        case .duration: return "\(period.title)活跃"
-        case .credits: return "\(period.title) Credits"
-        case .money: return "\(period.title)成本"
-        case .quota: return metric.remaining != nil ? "剩余额度" : "订阅额度"
-        }
+        L10n.primaryLabel(
+            periodRawValue: period.rawValue,
+            kind: metric.kind,
+            language: languageSettings.language
+        )
     }
 
 }
@@ -1040,10 +1102,13 @@ private struct ModelUsageRow: View {
     let usage: ModelUsage
     let accent: Color
     let currencyUnit: String
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
 
     private var primaryValue: String {
         if usage.tokens.total > 0 { return NumberFormat.compact(usage.tokens.total) }
-        if usage.requests > 0 { return "\(NumberFormat.compact(usage.requests)) 次" }
+        if usage.requests > 0 {
+            return "\(NumberFormat.compact(usage.requests)) \(L10n.text(.requestUnit, language: languageSettings.language))"
+        }
         if usage.credits > 0 { return NumberFormat.compact(usage.credits) }
         if usage.cost > 0 { return NumberFormat.currency(usage.cost, unit: currencyUnit) }
         return "—"
@@ -1086,25 +1151,53 @@ private struct ModelUsageRow: View {
 
             HStack(spacing: 5) {
                 if usage.tokens.input > 0 {
-                    ModelDetailChip(title: "输入 ↓", value: NumberFormat.compact(usage.tokens.input), accent: accent)
+                    ModelDetailChip(
+                        title: "\(L10n.text(.input, language: languageSettings.language)) ↓",
+                        value: NumberFormat.compact(usage.tokens.input),
+                        accent: accent
+                    )
                 }
                 if usage.tokens.output > 0 {
-                    ModelDetailChip(title: "输出 ↑", value: NumberFormat.compact(usage.tokens.output), accent: accent)
+                    ModelDetailChip(
+                        title: "\(L10n.text(.output, language: languageSettings.language)) ↑",
+                        value: NumberFormat.compact(usage.tokens.output),
+                        accent: accent
+                    )
                 }
                 if usage.tokens.cacheRead > 0 {
-                    ModelDetailChip(title: "缓存读 ⚡", value: NumberFormat.compact(usage.tokens.cacheRead), accent: accent)
+                    ModelDetailChip(
+                        title: "\(L10n.text(.cacheRead, language: languageSettings.language)) ⚡",
+                        value: NumberFormat.compact(usage.tokens.cacheRead),
+                        accent: accent
+                    )
                 }
                 if usage.tokens.cacheWrite > 0 {
-                    ModelDetailChip(title: "缓存写", value: NumberFormat.compact(usage.tokens.cacheWrite), accent: accent)
+                    ModelDetailChip(
+                        title: L10n.text(.cacheWrite, language: languageSettings.language),
+                        value: NumberFormat.compact(usage.tokens.cacheWrite),
+                        accent: accent
+                    )
                 }
                 if usage.tokens.reasoning > 0 {
-                    ModelDetailChip(title: "推理 🧠", value: NumberFormat.compact(usage.tokens.reasoning), accent: accent)
+                    ModelDetailChip(
+                        title: "\(L10n.text(.reasoning, language: languageSettings.language)) 🧠",
+                        value: NumberFormat.compact(usage.tokens.reasoning),
+                        accent: accent
+                    )
                 }
                 if usage.hitRate == nil, usage.requests > 0 {
-                    ModelDetailChip(title: "请求", value: "\(NumberFormat.compact(usage.requests)) 次", accent: accent)
+                    ModelDetailChip(
+                        title: L10n.text(.requests, language: languageSettings.language),
+                        value: "\(NumberFormat.compact(usage.requests)) \(L10n.text(.requestUnit, language: languageSettings.language))",
+                        accent: accent
+                    )
                 }
                 if usage.credits > 0 {
-                    ModelDetailChip(title: "Credits", value: NumberFormat.compact(usage.credits), accent: accent)
+                    ModelDetailChip(
+                        title: L10n.text(.credits, language: languageSettings.language),
+                        value: NumberFormat.compact(usage.credits),
+                        accent: accent
+                    )
                 }
             }
             .lineLimit(1)
@@ -1143,7 +1236,11 @@ private struct DashboardIconButton: View {
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(.white.opacity(0.7))
                 .frame(width: 40, height: 40)
-                .background(Color.white.opacity(0.08), in: Circle())
+                .aiLiquidGlass(
+                    tint: Color.white.opacity(0.12),
+                    in: Circle(),
+                    interactive: true
+                )
         }
         .buttonStyle(.plain)
         .help(help)
@@ -1152,58 +1249,43 @@ private struct DashboardIconButton: View {
 
 private struct DashboardRefreshButton: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
 
     private var accent: Color {
         store.refreshError == nil ? DashboardPalette.accent : DashboardPalette.warning
     }
 
     private var title: String {
-        if store.isRefreshing { return "同步中" }
-        if store.refreshError != nil { return "重试" }
-        return "更新"
+        if store.isRefreshing { return L10n.text(.syncing, language: languageSettings.language) }
+        if store.refreshError != nil { return L10n.text(.retry, language: languageSettings.language) }
+        return L10n.text(.update, language: languageSettings.language)
     }
 
     var body: some View {
         Button {
-            store.refresh()
+            store.refresh(forceQuota: true)
         } label: {
-            ZStack {
-                Capsule()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                accent.opacity(0.27),
-                                Color.white.opacity(0.08),
-                                accent.opacity(0.14)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
+            HStack(spacing: 6) {
+                refreshGlyph
 
-                Capsule()
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-
-                Capsule()
-                    .stroke(accent.opacity(store.isRefreshing ? 0.56 : 0.22), lineWidth: 1)
-
-                HStack(spacing: 6) {
-                    refreshGlyph
-
-                    Text(title)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.92))
-                        .fixedSize(horizontal: true, vertical: false)
-                        .id(title)
-                        .transition(.opacity.combined(with: .scale(scale: 0.86)))
-                }
-                .padding(.horizontal, 10)
+                Text(title)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .fixedSize(horizontal: true, vertical: false)
+                    .id(title)
+                    .transition(.opacity.combined(with: .scale(scale: 0.86)))
             }
+            .padding(.horizontal, 10)
             .frame(width: 92, height: 29)
             .contentShape(Capsule())
+            .aiLiquidGlass(
+                tint: accent.opacity(store.isRefreshing ? 0.24 : 0.12),
+                cornerRadius: 15,
+                interactive: true
+            )
         }
         .buttonStyle(.plain)
-        .help("立即更新本机用量")
+        .help(L10n.text(.immediateUpdate, language: languageSettings.language))
         .animation(.easeInOut(duration: 0.22), value: title)
     }
 
@@ -1263,7 +1345,4 @@ private enum DashboardPalette {
         }
     }
 
-    static func cardBackground(for provider: ProviderID) -> Color {
-        color(for: provider).opacity(0.11)
-    }
 }

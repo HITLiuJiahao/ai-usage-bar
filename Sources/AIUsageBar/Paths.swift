@@ -98,8 +98,9 @@ enum AppPaths {
         }
     }
 
-    /// Doubao Work keeps its local network-event ledger in the Tea LevelDB
-    /// store and mirrors recent events in the SDK log directory.
+    /// Doubao Work keeps model-usage and task records in the chat IndexedDB
+    /// store, its network-event ledger in Tea, and mirrors recent events in
+    /// SDK logs.
     static let doubaoWorkRoot = home
         .appendingPathComponent("Library", isDirectory: true)
         .appendingPathComponent("Application Support", isDirectory: true)
@@ -107,6 +108,10 @@ enum AppPaths {
     static let doubaoWorkTeaDatabase = doubaoWorkRoot
         .appendingPathComponent("Tea", isDirectory: true)
         .appendingPathComponent("tea.db", isDirectory: true)
+    static let doubaoWorkChatDatabase = doubaoWorkRoot
+        .appendingPathComponent("Default", isDirectory: true)
+        .appendingPathComponent("IndexedDB", isDirectory: true)
+        .appendingPathComponent("chrome_doubaowork-chat_0.indexeddb.leveldb", isDirectory: true)
     static let doubaoWorkSDKLogs = doubaoWorkRoot
         .appendingPathComponent("sdk_storage", isDirectory: true)
         .appendingPathComponent("log", isDirectory: true)

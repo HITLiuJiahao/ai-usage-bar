@@ -786,17 +786,23 @@ enum CodexQuotaService {
     }
 
     private static let cacheURL = AppPaths.appSupport.appendingPathComponent("codex-quota-cache.json")
-    private static let successfulCacheTTL: TimeInterval = 5 * 60
-    private static let failedCacheTTL: TimeInterval = 5 * 60
+    // The dashboard refreshes every 30 seconds. Keep the successful quota
+    // cache shorter than that interval so a refresh does not routinely reuse
+    // a several-minute-old 5-hour balance.
+    private static let successfulCacheTTL: TimeInterval = 15
+    private static let failedCacheTTL: TimeInterval = 15
     private static var memory: PersistedCache?
 
-    static func fetchLive() async -> CodexQuotaFetchResult? {
+    static func fetchLive(forceRefresh: Bool = false) async -> CodexQuotaFetchResult? {
         let now = Date()
         let cache = loadCache()
-        if let cache, now.timeIntervalSince(cache.fetchedAt) < successfulCacheTTL {
+        if !forceRefresh,
+           let cache,
+           now.timeIntervalSince(cache.fetchedAt) < successfulCacheTTL {
             return CodexQuotaFetchResult(snapshot: cache.snapshot, source: .cached)
         }
-        if let cache,
+        if !forceRefresh,
+           let cache,
            let lastFailureAt = cache.lastFailureAt,
            now.timeIntervalSince(lastFailureAt) < failedCacheTTL,
            now.timeIntervalSince(cache.fetchedAt) < failedCacheTTL {
@@ -806,16 +812,28 @@ enum CodexQuotaService {
             return cache.map { CodexQuotaFetchResult(snapshot: $0.snapshot, source: .cached) }
         }
 
-        guard let url = URL(string: "https://chatgpt.com/backend-api/wham/usage") else { return nil }
+        var components = URLComponents(string: "https://chatgpt.com/backend-api/wham/usage")
+        components?.queryItems = [
+            URLQueryItem(
+                name: "_ai_usage_bar_refresh",
+                value: String(Int(now.timeIntervalSince1970))
+            )
+        ]
+        guard let url = components?.url else { return nil }
         do {
             var headers = [
                 "Authorization": "Bearer \(auth.token)",
-                "User-Agent": "AIUsageBar/0.1"
+                "User-Agent": "AIUsageBar/0.1",
+                "Cache-Control": "no-cache"
             ]
             if let accountID = auth.accountID {
                 headers["ChatGPT-Account-Id"] = accountID
             }
-            let result = try await HTTPJSON.get(url: url, headers: headers)
+            let result = try await HTTPJSON.get(
+                url: url,
+                headers: headers,
+                cachePolicy: .reloadIgnoringLocalCacheData
+            )
             guard (200..<300).contains(result.statusCode),
                   let snapshot = parseLiveResponse(result.object, updatedAt: now) else {
                 throw URLError(.badServerResponse)

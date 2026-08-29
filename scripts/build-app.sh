@@ -33,6 +33,9 @@ rm -rf "$APP_PATH"
 mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
 cp "$BUILD_BINARY" "$APP_PATH/Contents/MacOS/AIUsageBar"
 cp "$PROJECT_ROOT/Resources/Info.plist" "$APP_PATH/Contents/Info.plist"
+if [[ -d "$PROJECT_ROOT/Resources/ProviderIcons" ]]; then
+    cp -R "$PROJECT_ROOT/Resources/ProviderIcons" "$APP_PATH/Contents/Resources/ProviderIcons"
+fi
 xattr -cr "$APP_PATH" 2>/dev/null || true
 # 某些 macOS 文件同步目录会在应用包的多个层级保留 Finder 元数据，
 # codesign 会将其误判为资源分叉；签名前递归移除这些属性。

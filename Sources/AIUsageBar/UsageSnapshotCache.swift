@@ -22,9 +22,67 @@ enum UsageSnapshotCache {
             ($0.provider, $0)
         })
         let snapshots = ProviderID.trackedCases.compactMap { provider in
-            snapshotsByProvider[provider]?.cachedVersion
+            snapshotsByProvider[provider]
+                .map(Self.rebasedForCurrentDay)
+                .map(\.cachedVersion)
         }
         return snapshots.isEmpty ? nil : snapshots
+    }
+
+    /// A cached daily aggregate is otherwise relabeled as today's usage after
+    /// midnight when the provider cannot be scanned. Doubao Work is kept
+    /// visible while its client is closed, so move a one-day-old cached
+    /// aggregate to yesterday and never leave it under today's label.
+    static func rebasedForCurrentDay(_ snapshot: ProviderSnapshot) -> ProviderSnapshot {
+        guard snapshot.provider == .doubaoWork else { return snapshot }
+
+        let calendar = Calendar.autoupdatingCurrent
+        let now = Date()
+        let startOfToday = calendar.startOfDay(for: now)
+        let snapshotDay = calendar.startOfDay(for: snapshot.updatedAt)
+        let dayDistance = calendar.dateComponents(
+            [.day],
+            from: snapshotDay,
+            to: startOfToday
+        ).day ?? 0
+        guard dayDistance > 0 else { return snapshot }
+
+        return ProviderSnapshot(
+            provider: snapshot.provider,
+            accounts: snapshot.accounts.map {
+                rebasedAccount($0, moveToYesterday: dayDistance == 1)
+            },
+            state: snapshot.state,
+            updatedAt: snapshot.updatedAt
+        )
+    }
+
+    private static func rebasedAccount(
+        _ account: AccountUsageSnapshot,
+        moveToYesterday: Bool
+    ) -> AccountUsageSnapshot {
+        let dailyMetrics = account.metrics.filter { $0.window == .today }
+        let metrics = account.metrics.filter {
+            $0.window != .today && $0.window != .yesterday
+        } + (moveToYesterday ? dailyMetrics.map { $0.rebased(to: .yesterday) } : [])
+
+        let dailyModels = account.modelUsages.filter { $0.window == .today }
+        let modelUsages = account.modelUsages.filter {
+            $0.window != .today && $0.window != .yesterday
+        } + (moveToYesterday ? dailyModels.map { $0.rebased(to: .yesterday) } : [])
+
+        return AccountUsageSnapshot(
+            id: account.id,
+            provider: account.provider,
+            accountName: account.accountName,
+            planName: account.planName,
+            state: account.state,
+            metrics: metrics,
+            updatedAt: account.updatedAt,
+            message: account.message,
+            source: account.source,
+            modelUsages: modelUsages
+        )
     }
 
     static func save(_ snapshots: [ProviderSnapshot]) {
@@ -48,6 +106,28 @@ enum UsageSnapshotCache {
 }
 
 private extension UsageMetric {
+    func rebased(to window: UsageWindow) -> UsageMetric {
+        UsageMetric(
+            key: key.replacingOccurrences(of: "-today", with: "-\(window.rawValue)"),
+            title: title,
+            kind: kind,
+            window: window,
+            used: used,
+            limit: limit,
+            remaining: remaining,
+            unit: unit,
+            source: source,
+            resetAt: resetAt,
+            note: note,
+            inputTokens: inputTokens,
+            outputTokens: outputTokens,
+            cacheReadTokens: cacheReadTokens,
+            cacheWriteTokens: cacheWriteTokens,
+            reasoningTokens: reasoningTokens,
+            inputIncludesCache: inputIncludesCache
+        )
+    }
+
     var cachedVersion: UsageMetric {
         UsageMetric(
             key: key,
@@ -93,6 +173,17 @@ private extension AccountUsageSnapshot {
             source: .cached,
             modelUsages: modelUsages
         )
+    }
+}
+
+private extension ModelUsage {
+    func rebased(to window: UsageWindow) -> ModelUsage {
+        var rebased = ModelUsage(name: name, window: window)
+        rebased.tokens = tokens
+        rebased.requests = requests
+        rebased.credits = credits
+        rebased.cost = cost
+        return rebased
     }
 }
 

@@ -17,38 +17,16 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     // Keep the dashboard order stable for the two-column layout.
     static let trackedCases: [ProviderID] = [
         .codex, .qwenWork, .zcode, .doubaoWork,
-        .workBuddy,
-        .miniMax
+        .workBuddy, .miniMax,
+        .openCode, .qianwenOffice, .deepSeekHarness
     ]
 
     var displayName: String {
-        switch self {
-        case .codex: return "Codex"
-        case .chatGPT: return "ChatGPT"
-        case .qwenWork: return "QwenWork"
-        case .zcode: return "ZCode"
-        case .openCode: return "OpenCode"
-        case .doubaoWork: return "豆包工作"
-        case .qianwenOffice: return "千问办公模式"
-        case .deepSeekHarness: return "DeepSeek Harness"
-        case .workBuddy: return "WorkBuddy"
-        case .miniMax: return "MiniMax Code"
-        }
+        L10n.providerName(self)
     }
 
     var shortName: String {
-        switch self {
-        case .codex: return "Codex"
-        case .chatGPT: return "ChatGPT"
-        case .qwenWork: return "QwenWork"
-        case .zcode: return "ZCode"
-        case .openCode: return "OpenCode"
-        case .doubaoWork: return "豆包工作"
-        case .qianwenOffice: return "Qwen Office"
-        case .deepSeekHarness: return "DeepSeek"
-        case .workBuddy: return "WorkBuddy"
-        case .miniMax: return "MiniMax"
-        }
+        L10n.providerName(self)
     }
 
     var symbolName: String {
@@ -74,12 +52,7 @@ enum ProviderState: Codable {
     case unavailable
 
     var title: String {
-        switch self {
-        case .connected: return "已连接"
-        case .partial: return "部分可用"
-        case .cached: return "历史数据"
-        case .unavailable: return "暂不可用"
-        }
+        L10n.stateTitle(self)
     }
 }
 
@@ -90,12 +63,7 @@ enum DataSource: Codable {
     case unavailable
 
     var title: String {
-        switch self {
-        case .server: return "服务端"
-        case .local: return "本地日志"
-        case .cached: return "本机缓存"
-        case .unavailable: return "未读取"
-        }
+        L10n.sourceTitle(self)
     }
 }
 
@@ -121,18 +89,7 @@ enum UsageWindow: String, Codable {
     case billing
 
     var title: String {
-        switch self {
-        case .today: return "今日"
-        case .yesterday: return "昨日"
-        case .fiveHours: return "5 小时"
-        case .daily: return "每日"
-        case .weekly: return "本周"
-        case .lastWeek: return "上周"
-        case .monthly: return "本月"
-        case .lastMonth: return "上月"
-        case .yearly: return "本年"
-        case .billing: return "订阅周期"
-        }
+        L10n.windowTitle(self)
     }
 }
 

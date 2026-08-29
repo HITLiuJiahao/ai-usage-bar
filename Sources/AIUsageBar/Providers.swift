@@ -8,11 +8,13 @@ struct HTTPJSONResult {
 enum HTTPJSON {
     static func get(
         url: URL,
-        headers: [String: String] = [:]
+        headers: [String: String] = [:],
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
     ) async throws -> HTTPJSONResult {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 5
+        request.cachePolicy = cachePolicy
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         for (key, value) in headers {
             request.setValue(value, forHTTPHeaderField: key)
@@ -465,10 +467,14 @@ struct CodexProvider: UsageProvider {
     let id: ProviderID = .codex
 
     func fetch() async -> ProviderSnapshot {
+        await fetch(forceRefresh: false)
+    }
+
+    func fetch(forceRefresh: Bool) async -> ProviderSnapshot {
         let scan = await Task.detached(priority: .utility) {
             CodexUsageScanner.scan()
         }.value
-        let liveQuota = await CodexQuotaService.fetchLive()
+        let liveQuota = await CodexQuotaService.fetchLive(forceRefresh: forceRefresh)
 
         var metrics = UsageMetrics.localMetrics(summary: scan.summary, includeMoney: true)
         if let liveQuota {
@@ -522,6 +528,13 @@ struct CodexProvider: UsageProvider {
 protocol UsageProvider {
     var id: ProviderID { get }
     func fetch() async -> ProviderSnapshot
+    func fetch(forceRefresh: Bool) async -> ProviderSnapshot
+}
+
+extension UsageProvider {
+    func fetch(forceRefresh: Bool) async -> ProviderSnapshot {
+        await fetch()
+    }
 }
 
 enum ProviderRegistry {
@@ -531,7 +544,10 @@ enum ProviderRegistry {
         ZCodeProvider(),
         DoubaoWorkProvider(),
         WorkBuddyProvider(),
-        MiniMaxProvider()
+        MiniMaxProvider(),
+        OpenCodeProvider(),
+        QianwenOfficeProvider(),
+        DeepSeekHarnessProvider()
     ]
 }
 
@@ -701,9 +717,18 @@ struct DoubaoWorkProvider: UsageProvider {
 
         let message: String
         if scan.responseCount > 0 {
-            message = "请求次数来自豆包工作本机的 Tea/tea.db 与 sdk_storage/log 网络事件；仅统计 /chat/completion 和 /samantha/chat/completion，并对重复日志去重。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
+            switch scan.countSource {
+            case .chatUsage:
+                message = "次数来自豆包工作聊天 IndexedDB 中的模型用量记录；一个工作任务包含多次模型调用时逐次计数，并按聊天目录日期归档。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
+            case .taskLedger:
+                message = "次数来自豆包工作本机聊天账本中的唯一工作任务消息；已排除会周期性重连的本地工具 SSE 通道。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
+            case .modelEvents:
+                message = "次数来自豆包工作本机记录的模型完成事件；已排除会周期性重连的本地工具 SSE 通道，并对 Tea/SDK 镜像日志去重。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
+            case .none:
+                message = "已读取豆包工作本机日志，但当前没有可计数的工作任务。"
+            }
         } else if hasRoot || scan.hasLogFiles {
-            message = "已找到豆包工作本机日志，但暂未识别到工作模式模型完成请求（/chat/completion 或 /samantha/chat/completion）。"
+            message = "已找到豆包工作本机日志，但暂未识别到工作模式模型完成事件；后台本地工具流不会被当作请求次数。"
         } else {
             message = "未找到豆包工作本机日志（~/Library/Application Support/DoubaoWork）。请先启动并使用豆包工作。"
         }
