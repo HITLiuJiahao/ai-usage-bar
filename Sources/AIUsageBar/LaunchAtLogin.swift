@@ -15,15 +15,15 @@ final class LaunchAtLoginSettings: ObservableObject {
     var statusText: String {
         switch status {
         case .enabled:
-            return "已启用"
+            return L10n.text(.loginStatusEnabled)
         case .requiresApproval:
-            return "等待系统确认"
+            return L10n.text(.loginStatusPending)
         case .notFound:
-            return "当前应用位置不可用"
+            return L10n.text(.loginStatusUnavailable)
         case .notRegistered:
-            return "未启用"
+            return L10n.text(.loginStatusDisabled)
         @unknown default:
-            return "状态未知"
+            return L10n.text(.loginStatusUnknown)
         }
     }
 

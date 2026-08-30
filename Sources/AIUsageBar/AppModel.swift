@@ -13,6 +13,7 @@ final class UsageStore: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var refreshInFlight = false
     private var refreshPending = false
+    private var forceQuotaRefreshPending = false
     private var retryCount = 0
 
     init() {
@@ -35,7 +36,10 @@ final class UsageStore: ObservableObject {
         refreshTask?.cancel()
     }
 
-    func refresh() {
+    func refresh(forceQuota: Bool = false) {
+        if forceQuota {
+            forceQuotaRefreshPending = true
+        }
         if refreshInFlight {
             // Do not start a second scan while one is active. Remember the
             // request and run exactly one follow-up pass when this one ends.
@@ -56,14 +60,16 @@ final class UsageStore: ObservableObject {
 
         while true {
             refreshPending = false
-            let hasUsableData = await performRefreshPass()
+            let forceQuota = forceQuotaRefreshPending
+            forceQuotaRefreshPending = false
+            let hasUsableData = await performRefreshPass(forceCodexQuota: forceQuota)
 
             // Match Tokei's initial-load retry behavior. Providers return a
             // snapshot instead of throwing, so a retry is useful only when
             // the whole first pass produced no usable data.
             if !hasUsableData && !refreshPending && !Task.isCancelled && retryCount < 3 {
                 retryCount += 1
-                refreshError = "读取用量失败，\(retryCount)/3 秒后重试"
+                refreshError = L10n.readFailedRetry(count: retryCount)
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 if Task.isCancelled { break }
                 continue
@@ -84,7 +90,7 @@ final class UsageStore: ObservableObject {
         refreshTask = nil
     }
 
-    private func performRefreshPass() async -> Bool {
+    private func performRefreshPass(forceCodexQuota: Bool) async -> Bool {
         refreshError = nil
         let providers = ProviderRegistry.all
 
@@ -93,7 +99,7 @@ final class UsageStore: ObservableObject {
         await withTaskGroup(of: ProviderSnapshot.self) { group in
             for provider in providers {
                 group.addTask(priority: .utility) {
-                    await provider.fetch()
+                    await provider.fetch(forceRefresh: forceCodexQuota && provider.id == .codex)
                 }
             }
 
@@ -106,8 +112,10 @@ final class UsageStore: ObservableObject {
                 // temporarily unavailable. Closing a client must not erase
                 // the historical usage already shown by the dashboard.
                 let previous = snapshots[index]
-                if previous.metricCount > 0,
+                if snapshot.provider != .doubaoWork,
+                   previous.metricCount > 0,
                    (snapshot.metricCount == 0 || snapshot.state == .unavailable) {
+                    snapshots[index] = UsageSnapshotCache.rebasedForCurrentDay(previous)
                     continue
                 }
                 snapshots[index] = snapshot
@@ -120,7 +128,7 @@ final class UsageStore: ObservableObject {
             snapshot.state != .unavailable && snapshot.metricCount > 0
         }
         if !hasUsableData {
-            refreshError = "暂未读取到可用用量"
+            refreshError = L10n.text(.usageUnavailable)
         }
         return hasUsableData
     }
@@ -129,15 +137,23 @@ final class UsageStore: ObservableObject {
         snapshots.filter { $0.state != .unavailable }.count
     }
 
+    var codexFiveHoursRemainingPercent: Int? {
+        codexRemainingPercent(for: .fiveHours)
+    }
+
     var codexWeeklyRemainingPercent: Int? {
-        let weeklyMetric = snapshots
+        codexRemainingPercent(for: .weekly)
+    }
+
+    private func codexRemainingPercent(for window: UsageWindow) -> Int? {
+        let quotaMetric = snapshots
             .first(where: { $0.provider == .codex })?
             .accounts
             .flatMap(\.metrics)
             .first(where: { metric in
-                metric.kind == .quota && metric.window == .weekly
+                metric.kind == .quota && metric.window == window
             })
-        guard let remaining = weeklyMetric?.remaining, remaining.isFinite else {
+        guard let remaining = quotaMetric?.remaining, remaining.isFinite else {
             return nil
         }
         return Int(min(max(remaining, 0), 100).rounded())

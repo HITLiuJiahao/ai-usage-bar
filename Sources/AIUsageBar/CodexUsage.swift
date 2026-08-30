@@ -11,6 +11,7 @@ struct CodexQuotaSnapshot: Codable {
     let windows: [CodexQuotaWindow]
     let planType: String?
     let creditsBalance: Double?
+    let resetCreditsAvailableCount: Int?
     let updatedAt: Date
 }
 
@@ -24,6 +25,38 @@ struct CodexUsageScanResult {
     let latestQuota: CodexQuotaSnapshot?
     let hasRolloutFiles: Bool
     let recognizedEventCount: Int
+}
+
+enum CodexResetCreditsParser {
+    static func availableCount(in object: [String: Any]) -> Int? {
+        if let count = directCount(in: object) {
+            return count
+        }
+        for key in ["rate_limit", "rateLimit"] {
+            if let nested = object[key] as? [String: Any],
+               let count = directCount(in: nested) {
+                return count
+            }
+        }
+        return nil
+    }
+
+    private static func directCount(in object: [String: Any]) -> Int? {
+        let raw = object["rate_limit_reset_credits"]
+            ?? object["rateLimitResetCredits"]
+            ?? object["reset_credits"]
+            ?? object["resetCredits"]
+        let value: Any?
+        if let details = raw as? [String: Any] {
+            value = details["available_count"] ?? details["availableCount"]
+        } else {
+            value = raw
+        }
+        guard let number = LocalData.number(value), number.isFinite else {
+            return nil
+        }
+        return max(Int(min(number.rounded(), Double(Int.max))), 0)
+    }
 }
 
 enum CodexPricing {
@@ -744,13 +777,15 @@ enum CodexQuotaParser {
                 windows.append(window)
             }
         }
-        guard !windows.isEmpty else { return nil }
+        let resetCreditsAvailableCount = CodexResetCreditsParser.availableCount(in: object)
+        guard !windows.isEmpty || resetCreditsAvailableCount != nil else { return nil }
 
         let credits = object["credits"] as? [String: Any]
         return CodexQuotaSnapshot(
             windows: windows,
             planType: LocalData.string(object["plan_type"] ?? object["planType"]),
             creditsBalance: LocalData.number(credits?["balance"] ?? object["credits_balance"]),
+            resetCreditsAvailableCount: resetCreditsAvailableCount,
             updatedAt: timestamp
         )
     }
@@ -786,17 +821,23 @@ enum CodexQuotaService {
     }
 
     private static let cacheURL = AppPaths.appSupport.appendingPathComponent("codex-quota-cache.json")
-    private static let successfulCacheTTL: TimeInterval = 5 * 60
-    private static let failedCacheTTL: TimeInterval = 5 * 60
+    // The dashboard refreshes every 30 seconds. Keep the successful quota
+    // cache shorter than that interval so a refresh does not routinely reuse
+    // a several-minute-old 5-hour balance.
+    private static let successfulCacheTTL: TimeInterval = 15
+    private static let failedCacheTTL: TimeInterval = 15
     private static var memory: PersistedCache?
 
-    static func fetchLive() async -> CodexQuotaFetchResult? {
+    static func fetchLive(forceRefresh: Bool = false) async -> CodexQuotaFetchResult? {
         let now = Date()
         let cache = loadCache()
-        if let cache, now.timeIntervalSince(cache.fetchedAt) < successfulCacheTTL {
+        if !forceRefresh,
+           let cache,
+           now.timeIntervalSince(cache.fetchedAt) < successfulCacheTTL {
             return CodexQuotaFetchResult(snapshot: cache.snapshot, source: .cached)
         }
-        if let cache,
+        if !forceRefresh,
+           let cache,
            let lastFailureAt = cache.lastFailureAt,
            now.timeIntervalSince(lastFailureAt) < failedCacheTTL,
            now.timeIntervalSince(cache.fetchedAt) < failedCacheTTL {
@@ -806,16 +847,28 @@ enum CodexQuotaService {
             return cache.map { CodexQuotaFetchResult(snapshot: $0.snapshot, source: .cached) }
         }
 
-        guard let url = URL(string: "https://chatgpt.com/backend-api/wham/usage") else { return nil }
+        var components = URLComponents(string: "https://chatgpt.com/backend-api/wham/usage")
+        components?.queryItems = [
+            URLQueryItem(
+                name: "_ai_usage_bar_refresh",
+                value: String(Int(now.timeIntervalSince1970))
+            )
+        ]
+        guard let url = components?.url else { return nil }
         do {
             var headers = [
                 "Authorization": "Bearer \(auth.token)",
-                "User-Agent": "AIUsageBar/0.1"
+                "User-Agent": "AIUsageBar/0.1",
+                "Cache-Control": "no-cache"
             ]
             if let accountID = auth.accountID {
                 headers["ChatGPT-Account-Id"] = accountID
             }
-            let result = try await HTTPJSON.get(url: url, headers: headers)
+            let result = try await HTTPJSON.get(
+                url: url,
+                headers: headers,
+                cachePolicy: .reloadIgnoringLocalCacheData
+            )
             guard (200..<300).contains(result.statusCode),
                   let snapshot = parseLiveResponse(result.object, updatedAt: now) else {
                 throw URLError(.badServerResponse)
@@ -823,7 +876,7 @@ enum CodexQuotaService {
             saveCache(PersistedCache(snapshot: snapshot, fetchedAt: now, lastFailureAt: nil))
             return CodexQuotaFetchResult(snapshot: snapshot, source: .server)
         } catch {
-            let failed = PersistedCache(snapshot: cache?.snapshot ?? CodexQuotaSnapshot(windows: [], planType: nil, creditsBalance: nil, updatedAt: now), fetchedAt: cache?.fetchedAt ?? .distantPast, lastFailureAt: now)
+            let failed = PersistedCache(snapshot: cache?.snapshot ?? CodexQuotaSnapshot(windows: [], planType: nil, creditsBalance: nil, resetCreditsAvailableCount: nil, updatedAt: now), fetchedAt: cache?.fetchedAt ?? .distantPast, lastFailureAt: now)
             if cache != nil { saveCache(failed) }
             return cache.map { CodexQuotaFetchResult(snapshot: $0.snapshot, source: .cached) }
         }
@@ -841,12 +894,14 @@ enum CodexQuotaService {
                 windows.append(window)
             }
         }
-        guard !windows.isEmpty else { return nil }
+        let resetCreditsAvailableCount = CodexResetCreditsParser.availableCount(in: root)
+        guard !windows.isEmpty || resetCreditsAvailableCount != nil else { return nil }
         let credits = root["credits"] as? [String: Any]
         return CodexQuotaSnapshot(
             windows: windows,
             planType: LocalData.string(root["plan_type"] ?? root["planType"] ?? rateLimit["plan_type"]),
             creditsBalance: LocalData.number(credits?["balance"] ?? root["credits_balance"]),
+            resetCreditsAvailableCount: resetCreditsAvailableCount,
             updatedAt: updatedAt
         )
     }

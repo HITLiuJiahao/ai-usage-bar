@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Presents the settings view explicitly instead of relying on SwiftUI's
@@ -7,10 +8,11 @@ import SwiftUI
 @MainActor
 final class SettingsWindowController: NSWindowController {
     static let shared = SettingsWindowController()
+    private var languageCancellable: AnyCancellable?
 
     private init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
+            contentRect: NSRect(x: 0, y: 0, width: 580, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -18,9 +20,9 @@ final class SettingsWindowController: NSWindowController {
         window.contentViewController = NSHostingController(
             rootView: AccountSettingsView()
         )
-        window.title = "AI Usage Bar 设置"
+        window.title = L10n.text(.settingsWindowTitle)
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 520, height: 430)
+        window.minSize = NSSize(width: 520, height: 560)
         window.center()
 
         // The dashboard itself is a floating panel. Keep settings at the same
@@ -28,6 +30,11 @@ final class SettingsWindowController: NSWindowController {
         window.level = .floating
 
         super.init(window: window)
+        languageCancellable = AppLanguageSettings.shared.$language
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.window?.title = L10n.text(.settingsWindowTitle)
+            }
     }
 
     required init?(coder: NSCoder) {
