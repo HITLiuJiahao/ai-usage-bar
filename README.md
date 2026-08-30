@@ -10,7 +10,7 @@ The app does not require a separate cloud backend. It primarily reads session fi
 
 ## Download
 
-Download the latest Apple Silicon (`arm64`) ZIP directly: [AIUsageBar-arm64-release-20260829.zip](https://raw.githubusercontent.com/HITLiuJiahao/ai-usage-bar/agent/fix-workbuddy-usage/dist/AIUsageBar-arm64-release-20260829.zip). Unzip the download, move `AIUsageBar.app` to the Applications folder, and open it by right-clicking **Open** the first time if macOS asks for confirmation.
+Download the latest Apple Silicon (`arm64`) ZIP directly: [AIUsageBar-arm64-release-20260825.zip](https://raw.githubusercontent.com/HITLiuJiahao/ai-usage-bar/agent/fix-workbuddy-usage/dist/AIUsageBar-arm64-release-20260825.zip). Unzip the download, move `AIUsageBar.app` to the Applications folder, and open it by right-clicking **Open** the first time if macOS asks for confirmation.
 
 ## Features
 

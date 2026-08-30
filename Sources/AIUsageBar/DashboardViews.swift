@@ -566,6 +566,15 @@ private struct DashboardProviderCard: View {
         balanceMetrics.map(balancePresentation(for:))
     }
 
+    private var resetCreditsAvailableCount: Int? {
+        guard snapshot.provider == .codex,
+              let count = account.resetCreditsAvailableCount,
+              count > 0 else {
+            return nil
+        }
+        return count
+    }
+
     private func balancePresentation(for metric: UsageMetric) -> BalancePresentation {
         let remainingFraction: Double?
         if let remaining = metric.remaining, let limit = metric.limit, limit > 0 {
@@ -718,7 +727,7 @@ private struct DashboardProviderCard: View {
 
     @ViewBuilder
     private var balanceSection: some View {
-        if !balancePresentations.isEmpty {
+        if !balancePresentations.isEmpty || resetCreditsAvailableCount != nil {
             VStack(alignment: .leading, spacing: 4) {
                 Rectangle()
                     .fill(Color.white.opacity(0.10))
@@ -774,6 +783,29 @@ private struct DashboardProviderCard: View {
                                 .scaleEffect(x: 1, y: 0.72, anchor: .center)
                         }
                     }
+                }
+
+                if let resetCreditsAvailableCount {
+                    HStack(spacing: 8) {
+                        Image(systemName: "clock.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(DashboardPalette.color(for: snapshot.provider))
+                            .frame(width: 22, height: 22)
+                            .background(
+                                DashboardPalette.color(for: snapshot.provider).opacity(0.13),
+                                in: Circle()
+                            )
+                        Text(
+                            L10n.resetCreditsAvailableText(
+                                count: resetCreditsAvailableCount,
+                                language: languageSettings.language
+                            )
+                        )
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.68))
+                        Spacer(minLength: 4)
+                    }
+                    .padding(.top, 3)
                 }
 
                 HStack {

@@ -70,6 +70,7 @@ enum L10n {
         case openFullOverview
         case balance
         case localActivity
+        case usageRange
         case models
         case noUsage
         case noMetric
@@ -144,6 +145,7 @@ enum L10n {
         case weekly
         case billing
         case availableCredits
+        case resetCreditsAvailable
         case subscriptionCredits
         case addOnCredits
         case sharedCredits
@@ -182,6 +184,7 @@ enum L10n {
             .openFullOverview: "打开完整概览",
             .balance: "余额",
             .localActivity: "本地活动",
+            .usageRange: "统计范围",
             .models: "模型",
             .noUsage: "暂时没有可显示的用量",
             .noMetric: "暂时没有可显示的指标",
@@ -256,6 +259,7 @@ enum L10n {
             .weekly: "本周",
             .billing: "订阅周期",
             .availableCredits: "可用 Credits",
+            .resetCreditsAvailable: "可用重置卡",
             .subscriptionCredits: "订阅 Credits",
             .addOnCredits: "加购 Credits",
             .sharedCredits: "共享 Credits",
@@ -292,6 +296,7 @@ enum L10n {
             .openFullOverview: "Open Full Overview",
             .balance: "Balance",
             .localActivity: "Local Activity",
+            .usageRange: "Usage Range",
             .models: "Models",
             .noUsage: "No usage to display",
             .noMetric: "No metrics to display",
@@ -366,6 +371,7 @@ enum L10n {
             .weekly: "This Week",
             .billing: "Billing Cycle",
             .availableCredits: "Available Credits",
+            .resetCreditsAvailable: "reset available",
             .subscriptionCredits: "Subscription Credits",
             .addOnCredits: "Add-on Credits",
             .sharedCredits: "Shared Credits",
@@ -402,6 +408,7 @@ enum L10n {
             .openFullOverview: "完全な概要を開く",
             .balance: "残高",
             .localActivity: "ローカルアクティビティ",
+            .usageRange: "集計期間",
             .models: "モデル",
             .noUsage: "表示できる使用量はありません",
             .noMetric: "表示できる指標はありません",
@@ -476,6 +483,7 @@ enum L10n {
             .weekly: "今週",
             .billing: "請求サイクル",
             .availableCredits: "利用可能なCredits",
+            .resetCreditsAvailable: "利用可能なリセット",
             .subscriptionCredits: "サブスクリプションCredits",
             .addOnCredits: "追加Credits",
             .sharedCredits: "共有Credits",
@@ -512,6 +520,7 @@ enum L10n {
             .openFullOverview: "전체 개요 열기",
             .balance: "잔액",
             .localActivity: "로컬 활동",
+            .usageRange: "집계 기간",
             .models: "모델",
             .noUsage: "표시할 사용량이 없습니다",
             .noMetric: "표시할 지표가 없습니다",
@@ -586,6 +595,7 @@ enum L10n {
             .weekly: "이번 주",
             .billing: "청구 주기",
             .availableCredits: "사용 가능한 Credits",
+            .resetCreditsAvailable: "사용 가능한 재설정",
             .subscriptionCredits: "구독 Credits",
             .addOnCredits: "추가 Credits",
             .sharedCredits: "공유 Credits",
@@ -851,6 +861,23 @@ enum L10n {
             return "\(NumberFormat.compact(remaining)) \(localizedUnit(metric.unit, language: language))"
         }
         return "—"
+    }
+
+    static func resetCreditsAvailableText(
+        count: Int,
+        language: AppLanguage = AppLanguageSettings.currentLanguage
+    ) -> String {
+        let count = max(count, 0)
+        switch language {
+        case .simplifiedChinese:
+            return "\(text(.resetCreditsAvailable, language: language)) \(count) 张"
+        case .english:
+            return "\(count) \(text(.resetCreditsAvailable, language: language))"
+        case .japanese:
+            return "\(text(.resetCreditsAvailable, language: language)) \(count) 枚"
+        case .korean:
+            return "\(text(.resetCreditsAvailable, language: language)) \(count)개"
+        }
     }
 
     static func usedText(

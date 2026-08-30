@@ -70,6 +70,14 @@ struct WorkBuddyCreditsIcon: View {
     let size: CGFloat
     let color: Color
 
+    // Keep the Credits glyph on the same visual scale as the SF Symbols used
+    // by the cost and activity metrics. The SVG's artwork fills more of its
+    // viewBox than a dollar-sign symbol fills its font box, so letting the
+    // image occupy the whole badge makes it look oversized.
+    private var glyphSize: CGFloat {
+        min(size * 0.50, 11)
+    }
+
     var body: some View {
         Group {
             if let image = Self.officialImage {
@@ -78,10 +86,12 @@ struct WorkBuddyCreditsIcon: View {
                     .renderingMode(.template)
                     .interpolation(.high)
                     .foregroundStyle(color)
+                    .frame(width: glyphSize, height: glyphSize)
             } else {
                 Image(systemName: "seal.fill")
-                    .font(.system(size: size * 0.62, weight: .semibold))
+                    .font(.system(size: glyphSize * 0.72, weight: .semibold))
                     .foregroundStyle(color)
+                    .frame(width: glyphSize, height: glyphSize)
             }
         }
         .frame(width: size, height: size)
@@ -106,7 +116,8 @@ struct WorkBuddyCreditsIcon: View {
 enum EdgeDockLayout {
     static let railWidth: CGFloat = 82
     static let detailWidth: CGFloat = 286
-    static let panelHeight: CGFloat = 620
+    // Leave enough vertical room for the direct period selector and detail footer.
+    static let panelHeight: CGFloat = 680
     static let panelSpacing: CGFloat = 9
     static let panelPadding: CGFloat = 10
     // Keep the first and last provider items inside the two large edge arcs.
@@ -373,10 +384,37 @@ private struct EdgeDockProviderItem: View {
     }
 }
 
+private enum EdgeDockActivityPeriod: String, CaseIterable, Identifiable, Equatable {
+    case today
+    case yesterday
+    case thisWeek
+    case lastWeek
+    case thisYear
+
+    var id: String { rawValue }
+
+    var window: UsageWindow {
+        switch self {
+        case .today: return .today
+        case .yesterday: return .yesterday
+        case .thisWeek: return .weekly
+        case .lastWeek: return .lastWeek
+        case .thisYear: return .yearly
+        }
+    }
+
+    func title(language: AppLanguage) -> String {
+        L10n.periodTitle(rawValue, language: language)
+    }
+}
+
 private struct EdgeDockDetailView: View {
     let snapshot: ProviderSnapshot
     let onOpenDashboard: () -> Void
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var activityPeriod: EdgeDockActivityPeriod = .today
+    @Namespace private var activityPeriodSelectionNamespace
 
     private var accent: Color {
         EdgeDockPalette.color(for: snapshot.provider)
@@ -399,17 +437,30 @@ private struct EdgeDockDetailView: View {
         EdgeDockData.quotaMetrics(for: snapshot)
     }
 
+    private var resetCreditsAvailableCount: Int? {
+        guard snapshot.provider == .codex,
+              let count = account.resetCreditsAvailableCount,
+              count > 0 else {
+            return nil
+        }
+        return count
+    }
+
     private var activityMetrics: [UsageMetric] {
         let preferredKinds: [MetricKind] = [.tokens, .requests, .money, .credits]
         return preferredKinds.compactMap { kind in
-            account.metrics.first(where: { $0.kind == kind && $0.hasActualUsage })
+            account.metrics.first {
+                $0.window == activityPeriod.window
+                    && $0.kind == kind
+                    && $0.hasActualUsage
+            }
         }
     }
 
     private var modelUsages: [ModelUsage] {
         var seenModelKeys = Set<String>()
         let sorted = account.modelUsages
-            .filter(\.hasUsage)
+            .filter { $0.window == activityPeriod.window && $0.hasUsage }
             .sorted { lhs, rhs in
                 let lhsValue = EdgeDockData.modelUsageValue(lhs)
                 let rhsValue = EdgeDockData.modelUsageValue(rhs)
@@ -447,6 +498,8 @@ private struct EdgeDockDetailView: View {
                 .frame(height: 1)
                 .padding(.vertical, 12)
 
+            activityPeriodSelector
+
             ScrollView(.vertical, showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 13) {
                     hero
@@ -464,9 +517,32 @@ private struct EdgeDockDetailView: View {
                         }
                     }
 
+                    if let resetCreditsAvailableCount {
+                        HStack(spacing: 8) {
+                            Image(systemName: "clock.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(accent)
+                                .frame(width: 24, height: 24)
+                                .background(accent.opacity(0.13), in: Circle())
+                            Text(
+                                L10n.resetCreditsAvailableText(
+                                    count: resetCreditsAvailableCount,
+                                    language: languageSettings.language
+                                )
+                            )
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.68))
+                            Spacer(minLength: 4)
+                        }
+                    }
+
                     if !activityMetrics.isEmpty {
                         VStack(alignment: .leading, spacing: 9) {
-                            sectionTitle(L10n.text(.localActivity, language: languageSettings.language))
+                            sectionTitle(
+                                scopedSectionTitle(
+                                    L10n.text(.localActivity, language: languageSettings.language)
+                                )
+                            )
                             ForEach(activityMetrics) { metric in
                                 EdgeDockActivityRow(
                                     metric: metric,
@@ -479,7 +555,11 @@ private struct EdgeDockDetailView: View {
 
                     if !modelUsages.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
-                            sectionTitle(L10n.text(.models, language: languageSettings.language))
+                            sectionTitle(
+                                scopedSectionTitle(
+                                    L10n.text(.models, language: languageSettings.language)
+                                )
+                            )
                             ForEach(modelUsages) { usage in
                                 EdgeDockModelRow(
                                     usage: usage,
@@ -499,6 +579,10 @@ private struct EdgeDockDetailView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(
+                    reduceMotion ? nil : EdgeDockMotion.periodContent,
+                    value: activityPeriod
+                )
             }
 
             Button(action: onOpenDashboard) {
@@ -526,6 +610,79 @@ private struct EdgeDockDetailView: View {
             tint: accent.opacity(0.17),
             cornerRadius: 22
         )
+    }
+
+    private var activityPeriodSelector: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                Image(systemName: "calendar")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(accent)
+                Text(L10n.text(.usageRange, language: languageSettings.language))
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.52))
+            }
+
+            HStack(spacing: 2) {
+                ForEach(EdgeDockActivityPeriod.allCases) { period in
+                    Button {
+                        selectActivityPeriod(period)
+                    } label: {
+                        Text(period.title(language: languageSettings.language))
+                            .font(.system(size: 10, weight: activityPeriod == period ? .semibold : .medium, design: .rounded))
+                            .foregroundStyle(activityPeriod == period ? .white : .white.opacity(0.54))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.68)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 7)
+                            .background {
+                                if activityPeriod == period {
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(accent.opacity(0.22))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                                .stroke(accent.opacity(0.38), lineWidth: 1)
+                                        )
+                                        .matchedGeometryEffect(
+                                            id: "edge-dock-period-selection",
+                                            in: activityPeriodSelectionNamespace
+                                        )
+                                }
+                            }
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity)
+                    .onHover { isHovering in
+                        guard isHovering else { return }
+                        selectActivityPeriod(period)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 6)
+        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .padding(.bottom, 2)
+    }
+
+    private func selectActivityPeriod(_ period: EdgeDockActivityPeriod) {
+        guard activityPeriod != period else { return }
+        if reduceMotion {
+            activityPeriod = period
+        } else {
+            withAnimation(EdgeDockMotion.periodSelection) {
+                activityPeriod = period
+            }
+        }
+    }
+
+    private func scopedSectionTitle(_ title: String) -> String {
+        "\(title) · \(activityPeriod.title(language: languageSettings.language))"
     }
 
     private var detailHeader: some View {
@@ -904,6 +1061,14 @@ private enum EdgeDockData {
 }
 
 private enum EdgeDockMotion {
+    static let periodSelection = Animation.spring(
+        response: 0.30,
+        dampingFraction: 0.88,
+        blendDuration: 0.04
+    )
+
+    static let periodContent = Animation.easeInOut(duration: 0.20)
+
     static let panel = Animation.timingCurve(
         0.22,
         0.82,

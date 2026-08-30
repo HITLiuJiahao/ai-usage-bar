@@ -485,6 +485,7 @@ struct CodexProvider: UsageProvider {
 
         let hasLocalUsage = scan.recognizedEventCount > 0
         let hasQuota = liveQuota != nil || scan.latestQuota != nil
+        let quotaSnapshot = liveQuota?.snapshot ?? scan.latestQuota
         let planName = liveQuota?.snapshot.planType ?? scan.latestQuota?.planType
         let codexRootExists = FileManager.default.fileExists(atPath: AppPaths.codexRoot.path)
         let state: ProviderState
@@ -516,6 +517,7 @@ struct CodexProvider: UsageProvider {
             provider: id,
             accountName: planName.map { "Codex · \($0)" } ?? "当前 Codex 账户",
             planName: planName,
+            resetCreditsAvailableCount: quotaSnapshot?.resetCreditsAvailableCount,
             state: state,
             metrics: metrics,
             message: messages.joined(separator: "\n"),
@@ -556,6 +558,7 @@ enum SnapshotFactory {
         provider: ProviderID,
         accountName: String,
         planName: String? = nil,
+        resetCreditsAvailableCount: Int? = nil,
         state: ProviderState,
         metrics: [UsageMetric],
         message: String?,
@@ -568,6 +571,7 @@ enum SnapshotFactory {
             provider: provider,
             accountName: accountName,
             planName: planName,
+            resetCreditsAvailableCount: resetCreditsAvailableCount,
             state: state,
             metrics: metrics,
             updatedAt: updatedAt,

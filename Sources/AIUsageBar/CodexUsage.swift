@@ -11,6 +11,7 @@ struct CodexQuotaSnapshot: Codable {
     let windows: [CodexQuotaWindow]
     let planType: String?
     let creditsBalance: Double?
+    let resetCreditsAvailableCount: Int?
     let updatedAt: Date
 }
 
@@ -24,6 +25,38 @@ struct CodexUsageScanResult {
     let latestQuota: CodexQuotaSnapshot?
     let hasRolloutFiles: Bool
     let recognizedEventCount: Int
+}
+
+enum CodexResetCreditsParser {
+    static func availableCount(in object: [String: Any]) -> Int? {
+        if let count = directCount(in: object) {
+            return count
+        }
+        for key in ["rate_limit", "rateLimit"] {
+            if let nested = object[key] as? [String: Any],
+               let count = directCount(in: nested) {
+                return count
+            }
+        }
+        return nil
+    }
+
+    private static func directCount(in object: [String: Any]) -> Int? {
+        let raw = object["rate_limit_reset_credits"]
+            ?? object["rateLimitResetCredits"]
+            ?? object["reset_credits"]
+            ?? object["resetCredits"]
+        let value: Any?
+        if let details = raw as? [String: Any] {
+            value = details["available_count"] ?? details["availableCount"]
+        } else {
+            value = raw
+        }
+        guard let number = LocalData.number(value), number.isFinite else {
+            return nil
+        }
+        return max(Int(min(number.rounded(), Double(Int.max))), 0)
+    }
 }
 
 enum CodexPricing {
@@ -744,13 +777,15 @@ enum CodexQuotaParser {
                 windows.append(window)
             }
         }
-        guard !windows.isEmpty else { return nil }
+        let resetCreditsAvailableCount = CodexResetCreditsParser.availableCount(in: object)
+        guard !windows.isEmpty || resetCreditsAvailableCount != nil else { return nil }
 
         let credits = object["credits"] as? [String: Any]
         return CodexQuotaSnapshot(
             windows: windows,
             planType: LocalData.string(object["plan_type"] ?? object["planType"]),
             creditsBalance: LocalData.number(credits?["balance"] ?? object["credits_balance"]),
+            resetCreditsAvailableCount: resetCreditsAvailableCount,
             updatedAt: timestamp
         )
     }
@@ -841,7 +876,7 @@ enum CodexQuotaService {
             saveCache(PersistedCache(snapshot: snapshot, fetchedAt: now, lastFailureAt: nil))
             return CodexQuotaFetchResult(snapshot: snapshot, source: .server)
         } catch {
-            let failed = PersistedCache(snapshot: cache?.snapshot ?? CodexQuotaSnapshot(windows: [], planType: nil, creditsBalance: nil, updatedAt: now), fetchedAt: cache?.fetchedAt ?? .distantPast, lastFailureAt: now)
+            let failed = PersistedCache(snapshot: cache?.snapshot ?? CodexQuotaSnapshot(windows: [], planType: nil, creditsBalance: nil, resetCreditsAvailableCount: nil, updatedAt: now), fetchedAt: cache?.fetchedAt ?? .distantPast, lastFailureAt: now)
             if cache != nil { saveCache(failed) }
             return cache.map { CodexQuotaFetchResult(snapshot: $0.snapshot, source: .cached) }
         }
@@ -859,12 +894,14 @@ enum CodexQuotaService {
                 windows.append(window)
             }
         }
-        guard !windows.isEmpty else { return nil }
+        let resetCreditsAvailableCount = CodexResetCreditsParser.availableCount(in: root)
+        guard !windows.isEmpty || resetCreditsAvailableCount != nil else { return nil }
         let credits = root["credits"] as? [String: Any]
         return CodexQuotaSnapshot(
             windows: windows,
             planType: LocalData.string(root["plan_type"] ?? root["planType"] ?? rateLimit["plan_type"]),
             creditsBalance: LocalData.number(credits?["balance"] ?? root["credits_balance"]),
+            resetCreditsAvailableCount: resetCreditsAvailableCount,
             updatedAt: updatedAt
         )
     }

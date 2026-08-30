@@ -233,6 +233,7 @@ struct AccountUsageSnapshot: Identifiable, Codable {
     let provider: ProviderID
     let accountName: String
     let planName: String?
+    let resetCreditsAvailableCount: Int?
     let state: ProviderState
     let metrics: [UsageMetric]
     let updatedAt: Date
@@ -245,6 +246,7 @@ struct AccountUsageSnapshot: Identifiable, Codable {
         provider: ProviderID,
         accountName: String,
         planName: String? = nil,
+        resetCreditsAvailableCount: Int? = nil,
         state: ProviderState,
         metrics: [UsageMetric],
         updatedAt: Date,
@@ -256,6 +258,7 @@ struct AccountUsageSnapshot: Identifiable, Codable {
         self.provider = provider
         self.accountName = accountName
         self.planName = planName
+        self.resetCreditsAvailableCount = resetCreditsAvailableCount
         self.state = state
         self.metrics = metrics
         self.updatedAt = updatedAt
