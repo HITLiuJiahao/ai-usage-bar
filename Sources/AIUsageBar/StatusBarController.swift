@@ -99,8 +99,9 @@ final class StatusBarController: NSObject, ObservableObject {
 
     private func updateStatusItem() {
         guard let button = statusItem?.button else { return }
-        let remaining = store.codexFiveHoursRemainingPercent
-        if let remaining {
+        let statusQuota = store.codexStatusQuota
+        if let statusQuota {
+            let remaining = statusQuota.remaining
             button.image = CodexQuotaStatusImage.make(remainingPercent: remaining)
             button.attributedTitle = NSAttributedString(
                 string: "\(remaining)%",
@@ -112,7 +113,10 @@ final class StatusBarController: NSObject, ObservableObject {
             button.imagePosition = .imageLeft
             button.imageScaling = .scaleProportionallyDown
             button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
-            button.toolTip = L10n.codexStatusTooltip(remaining: remaining)
+            button.toolTip = L10n.codexStatusTooltip(
+                remaining: remaining,
+                window: statusQuota.window
+            )
         } else {
             button.image = NSImage(
                 systemSymbolName: "gauge.medium",

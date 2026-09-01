@@ -113,6 +113,39 @@ struct WorkBuddyCreditsIcon: View {
     }()
 }
 
+struct UsageMetricIconBadge: View {
+    let symbol: String
+    let size: CGFloat
+    let color: Color
+
+    private var glyphSize: CGFloat {
+        min(size * 0.50, 11)
+    }
+
+    var body: some View {
+        Image(systemName: symbol)
+            .font(.system(size: glyphSize, weight: .semibold))
+            .foregroundStyle(color)
+            .frame(width: size, height: size)
+            .background(color.opacity(0.13), in: Circle())
+            .accessibilityHidden(true)
+    }
+}
+
+struct ResetCreditIcon: View {
+    let size: CGFloat
+    let color: Color
+
+    var body: some View {
+        UsageMetricIconBadge(
+            symbol: "arrow.clockwise",
+            size: size,
+            color: color
+        )
+        .accessibilityLabel(L10n.text(.resetCreditsAvailable))
+    }
+}
+
 enum EdgeDockLayout {
     static let railWidth: CGFloat = 82
     static let detailWidth: CGFloat = 286
@@ -446,6 +479,11 @@ private struct EdgeDockDetailView: View {
         return count
     }
 
+    private var resetCreditsExpiresAt: Date? {
+        guard resetCreditsAvailableCount != nil else { return nil }
+        return account.resetCreditsExpiresAt
+    }
+
     private var activityMetrics: [UsageMetric] {
         let preferredKinds: [MetricKind] = [.tokens, .requests, .money, .credits]
         return preferredKinds.compactMap { kind in
@@ -519,11 +557,7 @@ private struct EdgeDockDetailView: View {
 
                     if let resetCreditsAvailableCount {
                         HStack(spacing: 8) {
-                            Image(systemName: "clock.fill")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(accent)
-                                .frame(width: 24, height: 24)
-                                .background(accent.opacity(0.13), in: Circle())
+                            ResetCreditIcon(size: 24, color: accent)
                             Text(
                                 L10n.resetCreditsAvailableText(
                                     count: resetCreditsAvailableCount,
@@ -533,6 +567,16 @@ private struct EdgeDockDetailView: View {
                                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.white.opacity(0.68))
                             Spacer(minLength: 4)
+                            if let resetCreditsExpiresAt {
+                                HStack(spacing: 3) {
+                                    Text(L10n.text(.resetCreditsExpiresAt, language: languageSettings.language))
+                                    Text(resetCreditsExpiresAt, formatter: Self.resetCreditDateFormatter)
+                                }
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.52))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.68)
+                            }
                         }
                     }
 
@@ -685,6 +729,13 @@ private struct EdgeDockDetailView: View {
         "\(title) · \(activityPeriod.title(language: languageSettings.language))"
     }
 
+    private static let resetCreditDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MM-dd HH:mm"
+        return formatter
+    }()
+
     private var detailHeader: some View {
         HStack(spacing: 9) {
             ZStack {
@@ -791,17 +842,17 @@ private struct EdgeDockQuotaRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if metric.unit.localizedCaseInsensitiveContains("credit") {
-                    Group {
-                        if provider == .workBuddy {
-                            WorkBuddyCreditsIcon(size: 20, color: accent)
-                        } else {
-                            Image(systemName: "circle.dollarsign")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(accent)
-                        }
+                    if provider == .workBuddy {
+                        WorkBuddyCreditsIcon(size: 20, color: accent)
+                            .frame(width: 20, height: 20)
+                            .background(accent.opacity(0.13), in: Circle())
+                    } else {
+                        UsageMetricIconBadge(
+                            symbol: "dollarsign",
+                            size: 20,
+                            color: accent
+                        )
                     }
-                    .frame(width: 20, height: 20)
-                    .background(accent.opacity(0.13), in: Circle())
                 }
                 Text(L10n.edgeQuotaTitle(for: metric, language: languageSettings.language))
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -853,17 +904,17 @@ private struct EdgeDockActivityRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Group {
-                if provider == .workBuddy && metric.kind == .credits {
-                    WorkBuddyCreditsIcon(size: 24, color: accent)
-                } else {
-                    Image(systemName: EdgeDockData.symbol(for: metric.kind))
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(accent)
-                }
+            if provider == .workBuddy && metric.kind == .credits {
+                WorkBuddyCreditsIcon(size: 24, color: accent)
+                    .frame(width: 24, height: 24)
+                    .background(accent.opacity(0.13), in: Circle())
+            } else {
+                UsageMetricIconBadge(
+                    symbol: EdgeDockData.symbol(for: metric.kind),
+                    size: 24,
+                    color: accent
+                )
             }
-                .frame(width: 24, height: 24)
-                .background(accent.opacity(0.13), in: Circle())
 
             Text(L10n.metricTitle(metric, language: languageSettings.language))
                 .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -1035,7 +1086,7 @@ private enum EdgeDockData {
         case .requests: return "arrow.up.right"
         case .duration: return "clock"
         case .credits: return "circle.dollarsign"
-        case .money: return "dollarsign.circle"
+        case .money: return "dollarsign"
         case .quota: return "gauge.medium"
         }
     }

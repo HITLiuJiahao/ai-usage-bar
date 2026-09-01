@@ -146,6 +146,7 @@ enum L10n {
         case billing
         case availableCredits
         case resetCreditsAvailable
+        case resetCreditsExpiresAt
         case subscriptionCredits
         case addOnCredits
         case sharedCredits
@@ -260,6 +261,7 @@ enum L10n {
             .billing: "订阅周期",
             .availableCredits: "可用 Credits",
             .resetCreditsAvailable: "可用重置卡",
+            .resetCreditsExpiresAt: "最早过期",
             .subscriptionCredits: "订阅 Credits",
             .addOnCredits: "加购 Credits",
             .sharedCredits: "共享 Credits",
@@ -372,6 +374,7 @@ enum L10n {
             .billing: "Billing Cycle",
             .availableCredits: "Available Credits",
             .resetCreditsAvailable: "reset available",
+            .resetCreditsExpiresAt: "Earliest expiry",
             .subscriptionCredits: "Subscription Credits",
             .addOnCredits: "Add-on Credits",
             .sharedCredits: "Shared Credits",
@@ -484,6 +487,7 @@ enum L10n {
             .billing: "請求サイクル",
             .availableCredits: "利用可能なCredits",
             .resetCreditsAvailable: "利用可能なリセット",
+            .resetCreditsExpiresAt: "最短の有効期限",
             .subscriptionCredits: "サブスクリプションCredits",
             .addOnCredits: "追加Credits",
             .sharedCredits: "共有Credits",
@@ -596,6 +600,7 @@ enum L10n {
             .billing: "청구 주기",
             .availableCredits: "사용 가능한 Credits",
             .resetCreditsAvailable: "사용 가능한 재설정",
+            .resetCreditsExpiresAt: "가장 빠른 만료",
             .subscriptionCredits: "구독 Credits",
             .addOnCredits: "추가 Credits",
             .sharedCredits: "공유 Credits",
@@ -928,20 +933,40 @@ enum L10n {
 
     static func codexStatusTooltip(
         remaining: Int?,
+        window: UsageWindow = .fiveHours,
         language: AppLanguage = AppLanguageSettings.currentLanguage
     ) -> String {
         guard let remaining else {
             return text(.overviewTitle, language: language)
         }
+        let windowName: String
+        switch window {
+        case .fiveHours:
+            switch language {
+            case .simplifiedChinese: windowName = "5 小时"
+            case .english: windowName = "5-hour"
+            case .japanese: windowName = "5時間"
+            case .korean: windowName = "5시간"
+            }
+        case .weekly:
+            switch language {
+            case .simplifiedChinese: windowName = "7 天"
+            case .english: windowName = "7-day"
+            case .japanese: windowName = "7日"
+            case .korean: windowName = "7일"
+            }
+        default:
+            windowName = window.title
+        }
         switch language {
         case .simplifiedChinese:
-            return "Codex：5 小时剩余 \(remaining)% · 点击唤醒侧边栏"
+            return "Codex：\(windowName)剩余 \(remaining)% · 点击唤醒侧边栏"
         case .english:
-            return "Codex: 5-hour quota \(remaining)% remaining · Click to open the sidebar"
+            return "Codex: \(windowName) quota \(remaining)% remaining · Click to open the sidebar"
         case .japanese:
-            return "Codex：5時間クォータ残り \(remaining)% · クリックしてサイドバーを開く"
+            return "Codex：\(windowName)クォータ残り \(remaining)% · クリックしてサイドバーを開く"
         case .korean:
-            return "Codex: 5시간 한도 \(remaining)% 남음 · 클릭하여 사이드바 열기"
+            return "Codex: \(windowName) 한도 \(remaining)% 남음 · 클릭하여 사이드바 열기"
         }
     }
 

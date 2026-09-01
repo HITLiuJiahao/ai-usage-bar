@@ -145,6 +145,18 @@ final class UsageStore: ObservableObject {
         codexRemainingPercent(for: .weekly)
     }
 
+    /// Prefer the short rolling window when the account exposes it. Some
+    /// Codex plans expose only the seven-day window, so the status item must
+    /// fall back instead of going blank for those accounts.
+    var codexStatusQuota: (window: UsageWindow, remaining: Int)? {
+        for window in [UsageWindow.fiveHours, .weekly] {
+            if let remaining = codexRemainingPercent(for: window) {
+                return (window, remaining)
+            }
+        }
+        return nil
+    }
+
     private func codexRemainingPercent(for window: UsageWindow) -> Int? {
         let quotaMetric = snapshots
             .first(where: { $0.provider == .codex })?

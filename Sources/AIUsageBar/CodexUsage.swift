@@ -12,6 +12,7 @@ struct CodexQuotaSnapshot: Codable {
     let planType: String?
     let creditsBalance: Double?
     let resetCreditsAvailableCount: Int?
+    let resetCreditsExpiresAt: Date?
     let updatedAt: Date
 }
 
@@ -28,21 +29,83 @@ struct CodexUsageScanResult {
 }
 
 enum CodexResetCreditsParser {
-    static func availableCount(in object: [String: Any]) -> Int? {
-        if let count = directCount(in: object) {
-            return count
+    struct Summary {
+        let availableCount: Int?
+        let earliestExpiresAt: Date?
+    }
+
+    static func summary(in value: Any, now: Date = Date()) -> Summary {
+        guard let object = value as? [String: Any] else {
+            return Summary(availableCount: nil, earliestExpiresAt: nil)
         }
-        for key in ["rate_limit", "rateLimit"] {
-            if let nested = object[key] as? [String: Any],
-               let count = directCount(in: nested) {
-                return count
+
+        let candidates = candidateObjects(in: object)
+        let availableCount = candidates.compactMap(directCount(in:)).first
+        let earliestExpiresAt = candidates
+            .flatMap(creditObjects(in:))
+            .compactMap { credit -> Date? in
+                if let status = LocalData.string(credit["status"]),
+                   !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   status.lowercased() != "available" {
+                    return nil
+                }
+                guard let expiresAt = LocalData.date(
+                    credit["expires_at"]
+                        ?? credit["expiresAt"]
+                        ?? credit["expiration"]
+                        ?? credit["expiration_at"]
+                        ?? credit["expirationAt"]
+                ), expiresAt > now else {
+                    return nil
+                }
+                return expiresAt
+            }
+            .min()
+
+        return Summary(
+            availableCount: availableCount,
+            earliestExpiresAt: earliestExpiresAt
+        )
+    }
+
+    static func availableCount(in object: [String: Any]) -> Int? {
+        summary(in: object).availableCount
+    }
+
+    static func earliestExpiresAt(in value: Any, now: Date = Date()) -> Date? {
+        summary(in: value, now: now).earliestExpiresAt
+    }
+
+    private static func candidateObjects(in object: [String: Any]) -> [[String: Any]] {
+        var candidates = [object]
+        for key in [
+            "rate_limit",
+            "rateLimit",
+            "rate_limit_reset_credits",
+            "rateLimitResetCredits",
+            "data",
+            "result"
+        ] {
+            if let nested = object[key] as? [String: Any] {
+                candidates.append(nested)
             }
         }
-        return nil
+        return candidates
+    }
+
+    private static func creditObjects(in object: [String: Any]) -> [[String: Any]] {
+        for key in ["credits", "reset_credits", "resetCredits"] {
+            if let rawCredits = object[key] as? [Any] {
+                return rawCredits.compactMap { $0 as? [String: Any] }
+            }
+        }
+        return []
     }
 
     private static func directCount(in object: [String: Any]) -> Int? {
-        let raw = object["rate_limit_reset_credits"]
+        let raw = object["available_count"]
+            ?? object["availableCount"]
+            ?? object["rate_limit_reset_credits"]
             ?? object["rateLimitResetCredits"]
             ?? object["reset_credits"]
             ?? object["resetCredits"]
@@ -779,6 +842,7 @@ enum CodexQuotaParser {
         }
         let resetCreditsAvailableCount = CodexResetCreditsParser.availableCount(in: object)
         guard !windows.isEmpty || resetCreditsAvailableCount != nil else { return nil }
+        let resetCreditsExpiresAt = CodexResetCreditsParser.earliestExpiresAt(in: object)
 
         let credits = object["credits"] as? [String: Any]
         return CodexQuotaSnapshot(
@@ -786,6 +850,7 @@ enum CodexQuotaParser {
             planType: LocalData.string(object["plan_type"] ?? object["planType"]),
             creditsBalance: LocalData.number(credits?["balance"] ?? object["credits_balance"]),
             resetCreditsAvailableCount: resetCreditsAvailableCount,
+            resetCreditsExpiresAt: resetCreditsExpiresAt,
             updatedAt: timestamp
         )
     }
@@ -855,34 +920,90 @@ enum CodexQuotaService {
             )
         ]
         guard let url = components?.url else { return nil }
+        var resetCreditsComponents = URLComponents(
+            string: "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+        )
+        resetCreditsComponents?.queryItems = components?.queryItems
+        let resetCreditsURL = resetCreditsComponents?.url
         do {
-            var headers = [
-                "Authorization": "Bearer \(auth.token)",
-                "User-Agent": "AIUsageBar/0.1",
-                "Cache-Control": "no-cache"
-            ]
-            if let accountID = auth.accountID {
-                headers["ChatGPT-Account-Id"] = accountID
-            }
+            let headers: [String: String] = {
+                var headers = [
+                    "Authorization": "Bearer \(auth.token)",
+                    "User-Agent": "AIUsageBar/0.1",
+                    "Cache-Control": "no-cache"
+                ]
+                if let accountID = auth.accountID {
+                    headers["ChatGPT-Account-Id"] = accountID
+                }
+                return headers
+            }()
+            async let resetCredits = fetchResetCredits(
+                url: resetCreditsURL,
+                headers: headers,
+                now: now
+            )
             let result = try await HTTPJSON.get(
                 url: url,
                 headers: headers,
                 cachePolicy: .reloadIgnoringLocalCacheData
             )
+            let resetCreditsSummary = await resetCredits
             guard (200..<300).contains(result.statusCode),
-                  let snapshot = parseLiveResponse(result.object, updatedAt: now) else {
+                  let snapshot = parseLiveResponse(
+                      result.object,
+                      updatedAt: now,
+                      resetCreditsSummary: resetCreditsSummary
+                  ) else {
                 throw URLError(.badServerResponse)
             }
             saveCache(PersistedCache(snapshot: snapshot, fetchedAt: now, lastFailureAt: nil))
             return CodexQuotaFetchResult(snapshot: snapshot, source: .server)
         } catch {
-            let failed = PersistedCache(snapshot: cache?.snapshot ?? CodexQuotaSnapshot(windows: [], planType: nil, creditsBalance: nil, resetCreditsAvailableCount: nil, updatedAt: now), fetchedAt: cache?.fetchedAt ?? .distantPast, lastFailureAt: now)
+            let failed = PersistedCache(
+                snapshot: cache?.snapshot ?? CodexQuotaSnapshot(
+                    windows: [],
+                    planType: nil,
+                    creditsBalance: nil,
+                    resetCreditsAvailableCount: nil,
+                    resetCreditsExpiresAt: nil,
+                    updatedAt: now
+                ),
+                fetchedAt: cache?.fetchedAt ?? .distantPast,
+                lastFailureAt: now
+            )
             if cache != nil { saveCache(failed) }
             return cache.map { CodexQuotaFetchResult(snapshot: $0.snapshot, source: .cached) }
         }
     }
 
-    private static func parseLiveResponse(_ value: Any, updatedAt: Date) -> CodexQuotaSnapshot? {
+    private static func fetchResetCredits(
+        url: URL?,
+        headers: [String: String],
+        now: Date
+    ) async -> CodexResetCreditsParser.Summary? {
+        guard let url else { return nil }
+        do {
+            let result = try await HTTPJSON.get(
+                url: url,
+                headers: headers,
+                cachePolicy: .reloadIgnoringLocalCacheData,
+                timeoutInterval: 2
+            )
+            guard (200..<300).contains(result.statusCode),
+                  result.object is [String: Any] else {
+                return nil
+            }
+            return CodexResetCreditsParser.summary(in: result.object, now: now)
+        } catch {
+            return nil
+        }
+    }
+
+    private static func parseLiveResponse(
+        _ value: Any,
+        updatedAt: Date,
+        resetCreditsSummary: CodexResetCreditsParser.Summary?
+    ) -> CodexQuotaSnapshot? {
         guard let root = value as? [String: Any] else { return nil }
         let rateLimit = (root["rate_limit"] as? [String: Any])
             ?? (root["rateLimit"] as? [String: Any])
@@ -894,7 +1015,15 @@ enum CodexQuotaService {
                 windows.append(window)
             }
         }
-        let resetCreditsAvailableCount = CodexResetCreditsParser.availableCount(in: root)
+        let inlineResetCredits = CodexResetCreditsParser.summary(in: root, now: updatedAt)
+        let resetCreditsAvailableCount = resetCreditsSummary?.availableCount
+            ?? inlineResetCredits.availableCount
+        let resetCreditsExpiresAt: Date?
+        if let resetCreditsSummary {
+            resetCreditsExpiresAt = resetCreditsSummary.earliestExpiresAt
+        } else {
+            resetCreditsExpiresAt = inlineResetCredits.earliestExpiresAt
+        }
         guard !windows.isEmpty || resetCreditsAvailableCount != nil else { return nil }
         let credits = root["credits"] as? [String: Any]
         return CodexQuotaSnapshot(
@@ -902,6 +1031,7 @@ enum CodexQuotaService {
             planType: LocalData.string(root["plan_type"] ?? root["planType"] ?? rateLimit["plan_type"]),
             creditsBalance: LocalData.number(credits?["balance"] ?? root["credits_balance"]),
             resetCreditsAvailableCount: resetCreditsAvailableCount,
+            resetCreditsExpiresAt: resetCreditsExpiresAt,
             updatedAt: updatedAt
         )
     }

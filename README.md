@@ -1,6 +1,7 @@
 # AI Usage Bar
 
 ![AI Usage Bar dashboard](assets/dashboard.png)
+![AI Usage Bar edge dock](assets/edge-dock.png)
 
 AI Usage Bar is a local-first macOS menu bar application for viewing usage, subscription quotas, balances, and estimated costs from multiple AI coding tools in one place.
 
