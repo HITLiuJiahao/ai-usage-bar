@@ -9,11 +9,12 @@ enum HTTPJSON {
     static func get(
         url: URL,
         headers: [String: String] = [:],
-        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy
+        cachePolicy: URLRequest.CachePolicy = .useProtocolCachePolicy,
+        timeoutInterval: TimeInterval = 5
     ) async throws -> HTTPJSONResult {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 5
+        request.timeoutInterval = timeoutInterval
         request.cachePolicy = cachePolicy
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         for (key, value) in headers {
@@ -518,6 +519,7 @@ struct CodexProvider: UsageProvider {
             accountName: planName.map { "Codex · \($0)" } ?? "当前 Codex 账户",
             planName: planName,
             resetCreditsAvailableCount: quotaSnapshot?.resetCreditsAvailableCount,
+            resetCreditsExpiresAt: quotaSnapshot?.resetCreditsExpiresAt,
             state: state,
             metrics: metrics,
             message: messages.joined(separator: "\n"),
@@ -559,6 +561,7 @@ enum SnapshotFactory {
         accountName: String,
         planName: String? = nil,
         resetCreditsAvailableCount: Int? = nil,
+        resetCreditsExpiresAt: Date? = nil,
         state: ProviderState,
         metrics: [UsageMetric],
         message: String?,
@@ -572,6 +575,7 @@ enum SnapshotFactory {
             accountName: accountName,
             planName: planName,
             resetCreditsAvailableCount: resetCreditsAvailableCount,
+            resetCreditsExpiresAt: resetCreditsExpiresAt,
             state: state,
             metrics: metrics,
             updatedAt: updatedAt,

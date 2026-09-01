@@ -575,6 +575,11 @@ private struct DashboardProviderCard: View {
         return count
     }
 
+    private var resetCreditsExpiresAt: Date? {
+        guard resetCreditsAvailableCount != nil else { return nil }
+        return account.resetCreditsExpiresAt
+    }
+
     private func balancePresentation(for metric: UsageMetric) -> BalancePresentation {
         let remainingFraction: Double?
         if let remaining = metric.remaining, let limit = metric.limit, limit > 0 {
@@ -701,7 +706,7 @@ private struct DashboardProviderCard: View {
     private var stats: [DashboardStat] {
         [
             DashboardStat(
-                symbol: costUnit == "CNY" ? "yensign.circle" : "dollarsign.circle",
+                symbol: costUnit == "CNY" ? "yensign" : "dollarsign",
                 title: L10n.text(.estimatedCost, language: languageSettings.language),
                 value: costEstimate.map { NumberFormat.currency($0, unit: costUnit) } ?? "—"
             ),
@@ -744,16 +749,14 @@ private struct DashboardProviderCard: View {
                                             color: DashboardPalette.color(for: snapshot.provider)
                                         )
                                     } else {
-                                        Image(systemName: "circle.dollarsign")
-                                            .font(.system(size: 11, weight: .semibold))
-                                            .foregroundStyle(DashboardPalette.color(for: snapshot.provider))
+                                        UsageMetricIconBadge(
+                                            symbol: "dollarsign",
+                                            size: 22,
+                                            color: DashboardPalette.color(for: snapshot.provider)
+                                        )
                                     }
                                 }
-                                    .frame(width: 22, height: 22)
-                                    .background(
-                                        DashboardPalette.color(for: snapshot.provider).opacity(0.13),
-                                        in: Circle()
-                                    )
+                                .frame(width: 22, height: 22)
                             }
                             Text(balance.title)
                                 .font(.system(size: 11, weight: .semibold))
@@ -787,14 +790,10 @@ private struct DashboardProviderCard: View {
 
                 if let resetCreditsAvailableCount {
                     HStack(spacing: 8) {
-                        Image(systemName: "clock.fill")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(DashboardPalette.color(for: snapshot.provider))
-                            .frame(width: 22, height: 22)
-                            .background(
-                                DashboardPalette.color(for: snapshot.provider).opacity(0.13),
-                                in: Circle()
-                            )
+                        ResetCreditIcon(
+                            size: 22,
+                            color: DashboardPalette.color(for: snapshot.provider)
+                        )
                         Text(
                             L10n.resetCreditsAvailableText(
                                 count: resetCreditsAvailableCount,
@@ -804,6 +803,16 @@ private struct DashboardProviderCard: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.white.opacity(0.68))
                         Spacer(minLength: 4)
+                        if let resetCreditsExpiresAt {
+                            HStack(spacing: 4) {
+                                Text(L10n.text(.resetCreditsExpiresAt, language: languageSettings.language))
+                                Text(resetCreditsExpiresAt, formatter: Self.balanceDateFormatter)
+                            }
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.52))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.72)
+                        }
                     }
                     .padding(.top, 3)
                 }
@@ -1074,11 +1083,11 @@ private struct DashboardStatView: View {
                 CacheHitIcon(accent: accent, progress: stat.progress ?? 0)
                     .frame(width: 26, height: 26)
             } else {
-                Image(systemName: stat.symbol)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(accent)
-                    .frame(width: 26, height: 26)
-                    .background(accent.opacity(0.13), in: Circle())
+                UsageMetricIconBadge(
+                    symbol: stat.symbol,
+                    size: 26,
+                    color: accent
+                )
             }
             VStack(alignment: .leading, spacing: 1) {
                 Text(stat.title)
