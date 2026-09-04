@@ -321,6 +321,7 @@ enum ProviderPalette {
     static func color(for provider: ProviderID) -> Color {
         switch provider {
         case .codex: return .green
+        case .kimi: return Color(red: 0.48, green: 0.62, blue: 1.0)
         case .chatGPT: return .teal
         case .qwenWork: return .blue
         case .zcode: return .cyan
@@ -387,6 +388,14 @@ struct AccountSettingsView: View {
                                 ? "有効にすると、macOSへのログイン時にAI Usage Barが自動起動し、メニューバーで実行されます。"
                                 : "활성화하면 macOS에 로그인할 때 AI Usage Bar가 자동으로 시작되어 메뉴 막대에서 실행됩니다."
                 )
+            }
+
+            Section {
+                AppUpdateSettings()
+            } header: {
+                Text(L10n.text(.softwareUpdate, language: languageSettings.language))
+            } footer: {
+                Text(L10n.text(.softwareUpdateHelp, language: languageSettings.language))
             }
 
             Section {
@@ -479,7 +488,124 @@ struct AccountSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 540, height: 700)
+        .frame(width: 540, height: 760)
         .padding(.top, 8)
+    }
+}
+
+private struct AppUpdateSettings: View {
+    @ObservedObject private var updater = AppUpdater.shared
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 9) {
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("AI Usage Bar")
+                        .font(.headline)
+                    Text(
+                        "\(L10n.text(.currentVersion, language: languageSettings.language)) " +
+                        AppUpdater.currentVersion
+                    )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            stateContent
+
+            HStack {
+                Button {
+                    updater.checkForUpdate(manual: true)
+                } label: {
+                    Label(
+                        L10n.text(.checkForUpdates, language: languageSettings.language),
+                        systemImage: "arrow.clockwise"
+                    )
+                }
+                .disabled(updater.state.isBusy || hasAvailableUpdate)
+
+                Spacer()
+
+                if case .available = updater.state {
+                    Button {
+                        updater.installUpdate()
+                    } label: {
+                        Text(L10n.text(.installUpdate, language: languageSettings.language))
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+    }
+
+    private var hasAvailableUpdate: Bool {
+        if case .available = updater.state { return true }
+        return false
+    }
+
+    @ViewBuilder
+    private var stateContent: some View {
+        switch updater.state {
+        case .idle:
+            EmptyView()
+        case .checking:
+            HStack(spacing: 7) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(L10n.text(.checkingForUpdates, language: languageSettings.language))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        case .upToDate:
+            Label(
+                L10n.text(.upToDate, language: languageSettings.language),
+                systemImage: "checkmark.circle.fill"
+            )
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .available(let release):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(
+                    "\(L10n.text(.updateAvailable, language: languageSettings.language)) · " +
+                    release.tag
+                )
+                    .font(.subheadline.weight(.semibold))
+                Text(release.assetName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .downloading(let progress):
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text(L10n.text(.downloadingUpdate, language: languageSettings.language))
+                    Spacer()
+                    Text("\(Int((progress * 100).rounded()))%")
+                        .monospacedDigit()
+                }
+                .font(.caption)
+                ProgressView(value: progress, total: 1)
+            }
+        case .installing:
+            HStack(spacing: 7) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(L10n.text(.installingUpdate, language: languageSettings.language))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        case .failed(let failure):
+            Label(
+                L10n.updateFailureText(failure, language: languageSettings.language),
+                systemImage: "exclamationmark.triangle.fill"
+            )
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

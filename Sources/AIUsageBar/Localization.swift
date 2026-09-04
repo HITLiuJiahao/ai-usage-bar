@@ -102,6 +102,16 @@ enum L10n {
         case retry
         case update
         case immediateUpdate
+        case softwareUpdate
+        case softwareUpdateHelp
+        case checkForUpdates
+        case updateAvailable
+        case installUpdate
+        case checkingForUpdates
+        case downloadingUpdate
+        case installingUpdate
+        case upToDate
+        case currentVersion
         case appSettings
         case launchAtLogin
         case loginStatusEnabled
@@ -168,7 +178,7 @@ enum L10n {
     private static let translations: [AppLanguage: [Key: String]] = [
         .simplifiedChinese: [
             .overviewTitle: "AI 使用概览",
-            .overviewSubtitle: "Codex · ZCode · 豆包工作 · MiniMax Code · WorkBuddy · QwenWork · Token、模型与用量",
+            .overviewSubtitle: "Codex · KIMI Desktop · ZCode · 豆包工作 · MiniMax Code · WorkBuddy · QwenWork · Token、模型与用量",
             .updated: "更新",
             .reading: "正在读取",
             .localDataConnected: "本机 AI 数据已接入",
@@ -217,6 +227,16 @@ enum L10n {
             .retry: "重试",
             .update: "更新",
             .immediateUpdate: "立即更新本机用量",
+            .softwareUpdate: "软件更新",
+            .softwareUpdateHelp: "启动时自动检查 GitHub Releases；有新版本时可直接下载、校验并重启应用。",
+            .checkForUpdates: "检查更新",
+            .updateAvailable: "发现新版本",
+            .installUpdate: "下载并安装",
+            .checkingForUpdates: "正在检查更新…",
+            .downloadingUpdate: "正在下载更新…",
+            .installingUpdate: "正在安装更新…",
+            .upToDate: "已是最新版本",
+            .currentVersion: "当前版本",
             .appSettings: "应用设置",
             .launchAtLogin: "开机自启",
             .loginStatusEnabled: "已启用",
@@ -281,7 +301,7 @@ enum L10n {
         ],
         .english: [
             .overviewTitle: "AI Usage Overview",
-            .overviewSubtitle: "Codex · ZCode · Doubao Work · MiniMax Code · WorkBuddy · QwenWork · tokens, models, and usage",
+            .overviewSubtitle: "Codex · KIMI Desktop · ZCode · Doubao Work · MiniMax Code · WorkBuddy · QwenWork · tokens, models, and usage",
             .updated: "Updated",
             .reading: "Reading",
             .localDataConnected: "Local AI data connected",
@@ -330,6 +350,16 @@ enum L10n {
             .retry: "Retry",
             .update: "Update",
             .immediateUpdate: "Update local usage now",
+            .softwareUpdate: "Software Update",
+            .softwareUpdateHelp: "Checks GitHub Releases at launch. New versions can be downloaded, verified, and installed with an automatic restart.",
+            .checkForUpdates: "Check for Updates",
+            .updateAvailable: "Update Available",
+            .installUpdate: "Download and Install",
+            .checkingForUpdates: "Checking for updates…",
+            .downloadingUpdate: "Downloading update…",
+            .installingUpdate: "Installing update…",
+            .upToDate: "You're up to date",
+            .currentVersion: "Current version",
             .appSettings: "App Settings",
             .launchAtLogin: "Launch at Login",
             .loginStatusEnabled: "Enabled",
@@ -394,7 +424,7 @@ enum L10n {
         ],
         .japanese: [
             .overviewTitle: "AI 使用状況",
-            .overviewSubtitle: "Codex · ZCode · 豆包ワーク · MiniMax Code · WorkBuddy · QwenWork · トークン、モデル、使用量",
+            .overviewSubtitle: "Codex · KIMI Desktop · ZCode · 豆包ワーク · MiniMax Code · WorkBuddy · QwenWork · トークン、モデル、使用量",
             .updated: "更新",
             .reading: "読み込み中",
             .localDataConnected: "このMacのAIデータを接続済み",
@@ -443,6 +473,16 @@ enum L10n {
             .retry: "再試行",
             .update: "更新",
             .immediateUpdate: "ローカル使用量を今すぐ更新",
+            .softwareUpdate: "ソフトウェアアップデート",
+            .softwareUpdateHelp: "起動時にGitHub Releasesを確認します。新しいバージョンはダウンロード、検証、再起動まで自動で行えます。",
+            .checkForUpdates: "アップデートを確認",
+            .updateAvailable: "新しいバージョン",
+            .installUpdate: "ダウンロードして更新",
+            .checkingForUpdates: "アップデートを確認中…",
+            .downloadingUpdate: "アップデートをダウンロード中…",
+            .installingUpdate: "アップデートをインストール中…",
+            .upToDate: "最新バージョンです",
+            .currentVersion: "現在のバージョン",
             .appSettings: "アプリ設定",
             .launchAtLogin: "ログイン時に起動",
             .loginStatusEnabled: "有効",
@@ -507,7 +547,7 @@ enum L10n {
         ],
         .korean: [
             .overviewTitle: "AI 사용량 개요",
-            .overviewSubtitle: "Codex · ZCode · Doubao Work · MiniMax Code · WorkBuddy · QwenWork · 토큰, 모델 및 사용량",
+            .overviewSubtitle: "Codex · KIMI Desktop · ZCode · Doubao Work · MiniMax Code · WorkBuddy · QwenWork · 토큰, 모델 및 사용량",
             .updated: "업데이트",
             .reading: "읽는 중",
             .localDataConnected: "로컬 AI 데이터 연결됨",
@@ -556,6 +596,16 @@ enum L10n {
             .retry: "다시 시도",
             .update: "업데이트",
             .immediateUpdate: "로컬 사용량 지금 업데이트",
+            .softwareUpdate: "소프트웨어 업데이트",
+            .softwareUpdateHelp: "시작할 때 GitHub Releases를 확인합니다. 새 버전은 다운로드, 검증, 재시작까지 자동으로 진행할 수 있습니다.",
+            .checkForUpdates: "업데이트 확인",
+            .updateAvailable: "새 버전 있음",
+            .installUpdate: "다운로드 및 설치",
+            .checkingForUpdates: "업데이트 확인 중…",
+            .downloadingUpdate: "업데이트 다운로드 중…",
+            .installingUpdate: "업데이트 설치 중…",
+            .upToDate: "최신 버전입니다",
+            .currentVersion: "현재 버전",
             .appSettings: "앱 설정",
             .launchAtLogin: "로그인 시 실행",
             .loginStatusEnabled: "활성화됨",
@@ -632,6 +682,7 @@ enum L10n {
     ) -> String {
         switch provider {
         case .codex: return "Codex"
+        case .kimi: return "KIMI Desktop"
         case .chatGPT: return "ChatGPT"
         case .qwenWork: return "QwenWork"
         case .zcode: return "ZCode"
@@ -768,6 +819,30 @@ enum L10n {
         language: AppLanguage = AppLanguageSettings.currentLanguage
     ) -> String {
         let key = metric.key.lowercased()
+        if key.contains("kimi-membership-monthly") {
+            switch language {
+            case .simplifiedChinese: return "KIMI · 月度额度"
+            case .english: return "KIMI · Monthly quota"
+            case .japanese: return "KIMI · 月間クォータ"
+            case .korean: return "KIMI · 월간 한도"
+            }
+        }
+        if key.contains("kimi-code-5h") {
+            switch language {
+            case .simplifiedChinese: return "Kimi Code · 5 小时额度"
+            case .english: return "Kimi Code · 5-hour quota"
+            case .japanese: return "Kimi Code · 5時間クォータ"
+            case .korean: return "Kimi Code · 5시간 한도"
+            }
+        }
+        if key.contains("kimi-code-7d") {
+            switch language {
+            case .simplifiedChinese: return "Kimi Code · 7 天额度"
+            case .english: return "Kimi Code · 7-day quota"
+            case .japanese: return "Kimi Code · 7日クォータ"
+            case .korean: return "Kimi Code · 7일 한도"
+            }
+        }
         if metric.kind == .credits {
             if key == "codex-credits" { return text(.availableCredits, language: language) }
             return text(.credits, language: language)
@@ -810,6 +885,9 @@ enum L10n {
         for metric: UsageMetric,
         language: AppLanguage = AppLanguageSettings.currentLanguage
     ) -> String {
+        if metric.key.lowercased().contains("kimi-") {
+            return metricTitle(metric, language: language)
+        }
         if metric.unit.localizedCaseInsensitiveContains("credit") {
             return metricTitle(metric, language: language)
         }
@@ -827,6 +905,9 @@ enum L10n {
         for metric: UsageMetric,
         language: AppLanguage = AppLanguageSettings.currentLanguage
     ) -> String {
+        if metric.key.lowercased().contains("kimi-") {
+            return metricTitle(metric, language: language)
+        }
         switch metric.window {
         case .fiveHours: return text(.fiveHours, language: language)
         case .weekly, .lastWeek:
@@ -896,6 +977,77 @@ enum L10n {
         }
         let unit = localizedUnit(metric.unit, language: language)
         return "\(NumberFormat.compact(used))\(unit.isEmpty ? "" : " \(unit)")"
+    }
+
+    static func updateFailureText(
+        _ failure: AppUpdateFailure,
+        language: AppLanguage = AppLanguageSettings.currentLanguage
+    ) -> String {
+        switch failure {
+        case .noRelease:
+            switch language {
+            case .simplifiedChinese: return "暂时没有正式发布版本"
+            case .english: return "No public release is available yet"
+            case .japanese: return "公開リリースはまだありません"
+            case .korean: return "아직 공개 릴리스가 없습니다"
+            }
+        case .network:
+            switch language {
+            case .simplifiedChinese: return "暂时无法连接 GitHub"
+            case .english: return "GitHub is temporarily unavailable"
+            case .japanese: return "GitHubに一時的に接続できません"
+            case .korean: return "GitHub에 일시적으로 연결할 수 없습니다"
+            }
+        case .invalidMetadata:
+            switch language {
+            case .simplifiedChinese: return "更新信息不完整或更新包不受支持"
+            case .english: return "The update metadata or package is incomplete"
+            case .japanese: return "アップデート情報またはパッケージが不完全です"
+            case .korean: return "업데이트 정보 또는 패키지가 완전하지 않습니다"
+            }
+        case .untrustedURL:
+            switch language {
+            case .simplifiedChinese: return "更新地址不受信任，已停止安装"
+            case .english: return "The update URL was not trusted, so installation stopped"
+            case .japanese: return "信頼できない更新URLのため、インストールを停止しました"
+            case .korean: return "신뢰할 수 없는 업데이트 주소라 설치를 중단했습니다"
+            }
+        case .missingChecksum:
+            switch language {
+            case .simplifiedChinese: return "更新包缺少 SHA-256 校验信息"
+            case .english: return "The update package has no SHA-256 checksum"
+            case .japanese: return "アップデートパッケージにSHA-256チェックサムがありません"
+            case .korean: return "업데이트 패키지에 SHA-256 체크섬이 없습니다"
+            }
+        case .checksumMismatch:
+            switch language {
+            case .simplifiedChinese: return "更新包校验失败，已停止安装"
+            case .english: return "The update checksum did not match, so installation stopped"
+            case .japanese: return "アップデートのチェックサムが一致しないため、インストールを停止しました"
+            case .korean: return "업데이트 체크섬이 일치하지 않아 설치를 중단했습니다"
+            }
+        case .invalidPackage:
+            switch language {
+            case .simplifiedChinese: return "更新包不是有效的 AI Usage Bar 应用"
+            case .english: return "The package is not a valid AI Usage Bar app"
+            case .japanese: return "有効なAI Usage Barアプリパッケージではありません"
+            case .korean: return "유효한 AI Usage Bar 앱 패키지가 아닙니다"
+            }
+        case .appLocationUnavailable:
+            switch language {
+            case .simplifiedChinese: return "应用所在位置不可写，请将 App 放入 Applications 后重试"
+            case .english: return "The app location is not writable. Move the app to Applications and try again"
+            case .japanese: return "アプリの場所に書き込めません。Applicationsに移動して再試行してください"
+            case .korean: return "앱 위치에 쓸 수 없습니다. Applications로 옮긴 후 다시 시도하세요"
+            }
+        case .installation:
+            switch language {
+            case .simplifiedChinese: return "准备安装更新失败，原应用保持不变"
+            case .english: return "The update could not be prepared; the current app was left unchanged"
+            case .japanese: return "アップデートの準備に失敗しました。現在のアプリは変更されていません"
+            case .korean: return "업데이트 준비에 실패했습니다. 현재 앱은 변경되지 않았습니다"
+            }
+        }
     }
 
     static func primaryLabel(

@@ -32,6 +32,7 @@ final class StatusBarController: NSObject, ObservableObject {
     init(store: UsageStore) {
         self.store = store
         super.init()
+        AppUpdater.shared.startAutomaticChecks()
         configureStatusItem()
         configureContextMenu()
         store.$snapshots

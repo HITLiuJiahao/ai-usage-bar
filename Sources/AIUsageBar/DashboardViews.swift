@@ -354,6 +354,7 @@ struct DashboardPopover: View {
                     Text("AI Usage Bar")
                         .font(.system(size: 23, weight: .bold, design: .rounded))
                     DashboardRefreshButton(store: store)
+                    DashboardUpdatePrompt()
                 }
                 Text(L10n.text(.overviewSubtitle, language: languageSettings.language))
                     .font(.system(size: 13, weight: .medium))
@@ -528,6 +529,10 @@ private struct DashboardProviderCard: View {
             // visible so the restored five-hour allowance is not hidden by
             // the weekly window.
             preferredWindows = [.fiveHours, .weekly, .billing]
+        case .kimi:
+            // KIMI Desktop exposes Kimi Code's independent rate limits along
+            // with the monthly shared membership Credits balance.
+            preferredWindows = [.fiveHours, .weekly, .monthly, .billing]
         case .miniMax, .chatGPT, .zcode, .openCode, .doubaoWork:
             preferredWindows = [.weekly, .fiveHours, .billing]
         case .workBuddy:
@@ -551,7 +556,7 @@ private struct DashboardProviderCard: View {
                     if lhsAggregate != rhsAggregate { return lhsAggregate }
                     return lhs.key < rhs.key
                 }
-            if snapshot.provider == .codex {
+            if snapshot.provider == .codex || snapshot.provider == .kimi {
                 selected.append(contentsOf: matches.filter { candidate in
                     !selected.contains(where: { $0.id == candidate.id })
                 })
@@ -639,7 +644,31 @@ private struct DashboardProviderCard: View {
     }
 
     private var primaryMetric: UsageMetric? {
-        metric(kind: .tokens) ?? metric(kind: .quota) ?? metric(kind: .credits) ?? metric(kind: .requests)
+        if snapshot.provider == .kimi {
+            // KIMI's quota rows are supplementary account information. Keep
+            // the headline aligned with the other activity cards by showing
+            // local usage for the selected period instead of a quota balance.
+            if let localTokens = metric(kind: .tokens) {
+                return localTokens
+            }
+            if let localRequests = metric(kind: .requests) {
+                return localRequests
+            }
+            return UsageMetric(
+                key: "kimi-primary-total",
+                title: "Token",
+                kind: .tokens,
+                window: period.preferredWindows.first ?? .today,
+                used: 0,
+                limit: nil,
+                remaining: nil,
+                unit: "tokens",
+                source: .local,
+                resetAt: nil,
+                note: "所选时间范围暂无本地用量"
+            )
+        }
+        return metric(kind: .tokens) ?? metric(kind: .quota) ?? metric(kind: .credits) ?? metric(kind: .requests)
     }
 
     private var requestMetric: UsageMetric? {
@@ -700,7 +729,7 @@ private struct DashboardProviderCard: View {
     }
 
     private var costUnit: String {
-        snapshot.provider == .deepSeekHarness ? "CNY" : "USD"
+        snapshot.provider == .deepSeekHarness || snapshot.provider == .kimi ? "CNY" : "USD"
     }
 
     private var stats: [DashboardStat] {
@@ -1029,6 +1058,12 @@ private struct DashboardProviderCard: View {
     }
 
     private func primaryValueText(_ metric: UsageMetric) -> String {
+        if metric.kind == .quota, let remaining = metric.remaining {
+            if metric.unit == "%" {
+                return "\(NumberFormat.compact(remaining))%"
+            }
+            return NumberFormat.compact(remaining)
+        }
         if let used = metric.used {
             if metric.kind == .money { return NumberFormat.currency(used, unit: metric.unit) }
             return NumberFormat.compact(used)
@@ -1361,6 +1396,82 @@ private struct DashboardRefreshButton: View {
     }
 }
 
+private struct DashboardUpdatePrompt: View {
+    @ObservedObject private var updater = AppUpdater.shared
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
+
+    @ViewBuilder
+    var body: some View {
+        switch updater.state {
+        case .available(let release):
+            Button {
+                updater.installUpdate()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 12, weight: .bold))
+                    Text(L10n.text(.update, language: languageSettings.language))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .foregroundStyle(.white.opacity(0.94))
+                .padding(.horizontal, 10)
+                .frame(height: 29)
+                .contentShape(Capsule())
+                .aiLiquidGlass(
+                    tint: DashboardPalette.success.opacity(0.24),
+                    cornerRadius: 15,
+                    interactive: true
+                )
+            }
+            .buttonStyle(.plain)
+            .help(
+                "\(L10n.text(.updateAvailable, language: languageSettings.language)) \(release.tag)"
+            )
+        case .downloading(let progress):
+            updateProgress(
+                text: L10n.text(.downloadingUpdate, language: languageSettings.language),
+                progress: progress
+            )
+        case .installing:
+            updateProgress(
+                text: L10n.text(.installingUpdate, language: languageSettings.language),
+                progress: nil
+            )
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func updateProgress(text: String, progress: Double?) -> some View {
+        HStack(spacing: 6) {
+            if let progress {
+                ProgressView(value: progress, total: 1)
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Text(
+                progress.map { "\(Int(($0 * 100).rounded()))%" } ?? text
+            )
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.78))
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 29)
+        .aiLiquidGlass(
+            tint: Color.white.opacity(0.10),
+            cornerRadius: 15,
+            interactive: false
+        )
+        .help(text)
+    }
+}
+
 private enum DashboardPalette {
     static let background = LinearGradient(
         colors: [Color(red: 0.10, green: 0.11, blue: 0.16), Color(red: 0.14, green: 0.15, blue: 0.21)],
@@ -1374,6 +1485,7 @@ private enum DashboardPalette {
     static func color(for provider: ProviderID) -> Color {
         switch provider {
         case .codex: return Color(red: 0.45, green: 0.78, blue: 1.0)
+        case .kimi: return Color(red: 0.48, green: 0.62, blue: 1.0)
         case .chatGPT: return Color(red: 0.35, green: 0.82, blue: 0.72)
         case .qwenWork: return Color(red: 0.42, green: 0.69, blue: 1.0)
         case .zcode: return Color(red: 0.34, green: 0.78, blue: 0.92)

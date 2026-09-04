@@ -29,22 +29,52 @@ if [[ ! -x "$BUILD_BINARY" ]]; then
     exit 1
 fi
 
-rm -rf "$APP_PATH"
-mkdir -p "$APP_PATH/Contents/MacOS" "$APP_PATH/Contents/Resources"
-cp "$BUILD_BINARY" "$APP_PATH/Contents/MacOS/AIUsageBar"
-cp "$PROJECT_ROOT/Resources/Info.plist" "$APP_PATH/Contents/Info.plist"
+STAGING_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/aiusagebar-app.XXXXXX")"
+STAGED_APP="$STAGING_ROOT/AIUsageBar.app"
+mkdir -p "$STAGED_APP/Contents/MacOS" "$STAGED_APP/Contents/Resources"
+cp "$BUILD_BINARY" "$STAGED_APP/Contents/MacOS/AIUsageBar"
+cp "$PROJECT_ROOT/Resources/Info.plist" "$STAGED_APP/Contents/Info.plist"
 if [[ -d "$PROJECT_ROOT/Resources/ProviderIcons" ]]; then
-    cp -R "$PROJECT_ROOT/Resources/ProviderIcons" "$APP_PATH/Contents/Resources/ProviderIcons"
+    cp -R "$PROJECT_ROOT/Resources/ProviderIcons" "$STAGED_APP/Contents/Resources/ProviderIcons"
 fi
-xattr -cr "$APP_PATH" 2>/dev/null || true
+
+# Sign in a temporary directory first.  The project lives in a synced folder
+# on some Macs, where Finder/File Provider metadata can be reattached while
+# codesign is running and make an otherwise valid app fail verification.
+xattr -cr "$STAGED_APP" 2>/dev/null || true
 # 某些 macOS 文件同步目录会在应用包的多个层级保留 Finder 元数据，
 # codesign 会将其误判为资源分叉；签名前递归移除这些属性。
+find "$STAGED_APP" -print0 | while IFS= read -r -d '' entry_path; do
+    xattr -d com.apple.FinderInfo "$entry_path" 2>/dev/null || true
+    xattr -d 'com.apple.fileprovider.fpfs#P' "$entry_path" 2>/dev/null || true
+    xattr -d com.apple.provenance "$entry_path" 2>/dev/null || true
+done
+codesign --force --deep --sign - "$STAGED_APP" >/dev/null
+codesign --verify --deep --strict "$STAGED_APP"
+
+mkdir -p "$(dirname "$APP_PATH")"
+rm -rf "$APP_PATH"
+ditto --norsrc "$STAGED_APP" "$APP_PATH"
+# The destination folder may reattach Finder/File Provider metadata during the
+# copy. Remove it once more from the final app before verifying the artifact.
+xattr -cr "$APP_PATH" 2>/dev/null || true
 find "$APP_PATH" -print0 | while IFS= read -r -d '' entry_path; do
     xattr -d com.apple.FinderInfo "$entry_path" 2>/dev/null || true
     xattr -d 'com.apple.fileprovider.fpfs#P' "$entry_path" 2>/dev/null || true
     xattr -d com.apple.provenance "$entry_path" 2>/dev/null || true
 done
-codesign --force --deep --sign - "$APP_PATH" >/dev/null
+codesign --verify --deep --strict "$APP_PATH"
+
+# Keep a stable Apple Silicon archive name for GitHub Releases. GitHub exposes
+# the uploaded asset digest through its Releases API, while the sidecar is
+# also useful for manually verifying a download before publishing it.
+RELEASE_ZIP_PATH="$PROJECT_ROOT/dist/AIUsageBar-arm64.zip"
+RELEASE_CHECKSUM_PATH="$RELEASE_ZIP_PATH.sha256"
+rm -f "$RELEASE_ZIP_PATH" "$RELEASE_CHECKSUM_PATH"
+ditto -c -k --norsrc --keepParent "$APP_PATH" "$RELEASE_ZIP_PATH"
+shasum -a 256 "$RELEASE_ZIP_PATH" > "$RELEASE_CHECKSUM_PATH"
 
 echo "已生成：$APP_PATH"
+echo "已生成更新包：$RELEASE_ZIP_PATH"
+echo "已生成校验文件：$RELEASE_CHECKSUM_PATH"
 echo "启动命令：open \"$APP_PATH\""

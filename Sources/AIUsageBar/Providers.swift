@@ -529,6 +529,77 @@ struct CodexProvider: UsageProvider {
     }
 }
 
+struct KimiProvider: UsageProvider {
+    let id: ProviderID = .kimi
+
+    func fetch() async -> ProviderSnapshot {
+        let scan = await Task.detached(priority: .utility) {
+            KimiUsageScanner.scan()
+        }.value
+        let quota = await KimiQuotaService.fetch()
+
+        var metrics = KimiUsageMetrics.make(scan: scan)
+        if let quota {
+            metrics.append(contentsOf: quota.metrics)
+        }
+
+        let hasLocalUsage = scan.responseCount > 0
+        let hasQuota = quota != nil
+        let hasKimiRoot = FileManager.default.fileExists(atPath: AppPaths.kimiDesktopSupport.path)
+        let state: ProviderState
+        if hasLocalUsage || hasQuota {
+            state = .connected
+        } else if hasKimiRoot || scan.hasSessionFiles {
+            state = .partial
+        } else {
+            state = .unavailable
+        }
+
+        var messages: [String] = []
+        if hasLocalUsage {
+            messages.append("本地明细来自 KIMI Desktop 的 daimon runtime wire.jsonl；usage.record 是权威用量事件，按记录时间统计请求、Token、缓存和模型，并按 wire 会话去重统计会话数。")
+            if scan.tokenResponseCount < scan.responseCount {
+                messages.append("其中 \(scan.responseCount - scan.tokenResponseCount) 条响应没有非零 Token 字段，仅计入请求数。")
+            }
+            if !scan.unpricedModels.isEmpty {
+                messages.append("以下模型未匹配到 Kimi 官方公开价格，仅计入 Token，不计入成本：\(scan.unpricedModels.joined(separator: ", "))。")
+            }
+        } else if scan.hasSessionFiles {
+            messages.append("已找到 KIMI Desktop 本机 Agent 会话文件，但暂未识别到可统计的模型响应。")
+        } else {
+            messages.append("未找到 KIMI Desktop 本机 Agent 会话记录。请先启动并使用 KIMI Desktop 的工作模式。")
+        }
+
+        if hasQuota {
+            messages.append("会员共享 Credits、Kimi Code 5 小时/7 天限额、套餐及重置时间来自 KIMI Desktop 使用的官方 MembershipService 接口；共享 Credits 由 Kimi 会员功能共用。成本按 Kimi API 公开 Token 价估算，不等同于会员 Credits 扣减。")
+        } else if hasKimiRoot {
+            messages.append("已找到 KIMI Desktop，但官方会员额度暂未读取到；本地 Token、请求、模型和成本仍可显示。")
+        } else {
+            messages.append("未读取官方会员额度：KIMI Desktop 未找到已登录状态，或官方接口暂时不可用。")
+        }
+
+        let source: DataSource
+        if hasQuota {
+            source = .server
+        } else if hasLocalUsage {
+            source = .local
+        } else {
+            source = .unavailable
+        }
+
+        return SnapshotFactory.make(
+            provider: id,
+            accountName: quota?.accountName ?? (scan.latestModel.map { "KIMI Desktop · \($0)" } ?? "KIMI Desktop"),
+            planName: quota?.planName,
+            state: state,
+            metrics: metrics,
+            message: messages.joined(separator: "\n"),
+            source: source,
+            modelUsages: UsageMetrics.modelUsages(summary: scan.summary)
+        )
+    }
+}
+
 protocol UsageProvider {
     var id: ProviderID { get }
     func fetch() async -> ProviderSnapshot
@@ -544,6 +615,7 @@ extension UsageProvider {
 enum ProviderRegistry {
     static let all: [any UsageProvider] = [
         CodexProvider(),
+        KimiProvider(),
         QwenWorkProvider(),
         ZCodeProvider(),
         DoubaoWorkProvider(),

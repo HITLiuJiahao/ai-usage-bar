@@ -120,6 +120,24 @@ enum AppPaths {
     static let deepSeekHarnessSessions = deepSeekHarnessRoot
         .appendingPathComponent("sessions", isDirectory: true)
 
+    /// KIMI Desktop keeps the local Agent runtime and the web membership
+    /// credential under the same application-support directory.  The
+    /// credential is read only for the official membership request and is
+    /// never written into AI Usage Bar's own cache.
+    static let kimiDesktopSupport = home
+        .appendingPathComponent("Library", isDirectory: true)
+        .appendingPathComponent("Application Support", isDirectory: true)
+        .appendingPathComponent("kimi-desktop", isDirectory: true)
+    static let kimiDaimon = kimiDesktopSupport
+        .appendingPathComponent("daimon-share", isDirectory: true)
+        .appendingPathComponent("daimon", isDirectory: true)
+    static let kimiDesktopConfig = kimiDaimon.appendingPathComponent("config.json")
+    static let kimiDesktopSessions = kimiDaimon
+        .appendingPathComponent("runtime", isDirectory: true)
+        .appendingPathComponent("kimi-code", isDirectory: true)
+        .appendingPathComponent("home", isDirectory: true)
+        .appendingPathComponent("sessions", isDirectory: true)
+
     static let miniMaxSupport = home
         .appendingPathComponent("Library", isDirectory: true)
         .appendingPathComponent("Application Support", isDirectory: true)
