@@ -51,6 +51,7 @@ struct ProviderLogo: View {
     private static func resourceName(for provider: ProviderID) -> String? {
         switch provider {
         case .codex: return "provider-codex"
+        case .kimi: return "provider-kimi"
         case .qwenWork: return "provider-qwen-work"
         case .zcode: return "provider-zcode"
         case .doubaoWork: return "provider-doubao-work"
@@ -608,7 +609,7 @@ private struct EdgeDockDetailView: View {
                                 EdgeDockModelRow(
                                     usage: usage,
                                     accent: accent,
-                                    currencyUnit: snapshot.provider == .deepSeekHarness ? "CNY" : "USD"
+                                    currencyUnit: snapshot.provider == .deepSeekHarness || snapshot.provider == .kimi ? "CNY" : "USD"
                                 )
                             }
                         }
@@ -785,7 +786,7 @@ private struct EdgeDockDetailView: View {
                 Text(
                     L10n.usedText(
                         for: metric,
-                        currencyUnit: snapshot.provider == .deepSeekHarness ? "CNY" : "USD",
+                        currencyUnit: snapshot.provider == .deepSeekHarness || snapshot.provider == .kimi ? "CNY" : "USD",
                         language: languageSettings.language
                     )
                 )
@@ -925,7 +926,7 @@ private struct EdgeDockActivityRow: View {
             Text(
                 L10n.usedText(
                     for: metric,
-                    currencyUnit: "USD",
+                    currencyUnit: provider == .deepSeekHarness || provider == .kimi ? "CNY" : "USD",
                     language: languageSettings.language
                 )
             )
@@ -1048,6 +1049,8 @@ private enum EdgeDockData {
         switch snapshot.provider {
         case .codex:
             order = [.fiveHours, .weekly, .billing, .monthly]
+        case .kimi:
+            order = [.fiveHours, .weekly, .monthly, .billing]
         case .miniMax, .zcode, .openCode, .doubaoWork:
             order = [.weekly, .fiveHours, .billing, .monthly]
         default:
@@ -1060,9 +1063,9 @@ private enum EdgeDockData {
                 if !result.contains(where: { $0.id == candidate.id }) {
                     result.append(candidate)
                 }
-                if snapshot.provider != .codex { break }
+                if snapshot.provider != .codex && snapshot.provider != .kimi { break }
             }
-            if snapshot.provider != .codex, !result.isEmpty { break }
+            if snapshot.provider != .codex && snapshot.provider != .kimi, !result.isEmpty { break }
         }
         return result
     }
@@ -1276,6 +1279,7 @@ private enum EdgeDockPalette {
     static func color(for provider: ProviderID) -> Color {
         switch provider {
         case .codex: return Color(red: 0.45, green: 0.78, blue: 1.0)
+        case .kimi: return Color(red: 0.48, green: 0.62, blue: 1.0)
         case .chatGPT: return Color(red: 0.35, green: 0.82, blue: 0.72)
         case .qwenWork: return Color(red: 0.42, green: 0.69, blue: 1.0)
         case .zcode: return Color(red: 0.34, green: 0.78, blue: 0.92)

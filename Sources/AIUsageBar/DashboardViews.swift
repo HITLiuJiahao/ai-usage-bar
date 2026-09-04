@@ -73,35 +73,68 @@ enum DashboardLayout {
     // Keep the overview compact when more providers have activity in the
     // selected period. Additional cards remain in the scrollable grid.
     static let maximumVisibleModuleCount = 6
-    // The balance row is part of the collapsed card, so the minimum row
-    // height needs a little extra room beyond the token-only layout.
-    static let cardHeight: CGFloat = 240
+    // The balance row is part of the collapsed card, so the minimum card
+    // height needs a little extra room beyond the token-only layout. Cards
+    // can still grow naturally when a provider has more quota rows or model
+    // details.
+    static let cardHeight: CGFloat = 220
     static let gridSpacing: CGFloat = 12
+    static let maximumPanelHeight: CGFloat = 900
+    static let screenVerticalInset: CGFloat = 24
 
-    // Two provider cards share one row. Keep one row as the minimum so an
-    // empty or still-loading dashboard does not collapse into a tiny popover.
-    static func gridHeight(forModuleCount count: Int, cardHeights: [CGFloat] = []) -> CGFloat {
-        let rowCount = max(1, (max(count, 0) + 1) / 2)
-        var gridHeight: CGFloat = 0
-        for row in 0..<rowCount {
-            let firstIndex = row * 2
-            let firstHeight = firstIndex < cardHeights.count ? cardHeights[firstIndex] : cardHeight
-            let secondIndex = firstIndex + 1
-            let secondHeight = secondIndex < cardHeights.count ? cardHeights[secondIndex] : cardHeight
-            gridHeight += max(cardHeight, max(firstHeight, secondHeight))
-        }
-        gridHeight += CGFloat(max(rowCount - 1, 0)) * gridSpacing
-        return gridHeight
+    private static let outerPadding: CGFloat = 16 * 2
+    private static let headerHeight: CGFloat = 48
+    private static let periodSelectorHeight: CGFloat = 50
+    private static let stackSpacing: CGFloat = 10 * 3
+
+    static func chromeHeight(footerHeight: CGFloat = 40) -> CGFloat {
+        outerPadding
+            + headerHeight
+            + periodSelectorHeight
+            + footerHeight
+            + stackSpacing
     }
 
-    static func contentHeight(forModuleCount count: Int, cardHeights: [CGFloat] = []) -> CGFloat {
+    static func maximumHeight(for visibleFrame: CGRect? = nil) -> CGFloat {
+        let screenHeight = visibleFrame?.height
+            ?? NSScreen.main?.visibleFrame.height
+            ?? maximumPanelHeight
+        return min(
+            maximumPanelHeight,
+            max(1, screenHeight - screenVerticalInset)
+        )
+    }
+
+    // Cards are arranged as two natural-height columns. This avoids making a
+    // short card as tall as a neighboring quota-heavy card while preserving
+    // the original row-major provider order (even indexes on the left,
+    // odd indexes on the right).
+    static func gridHeight(forModuleCount count: Int, cardHeights: [CGFloat] = []) -> CGFloat {
+        let normalizedCount = max(count, 0)
+        guard normalizedCount > 0 else { return cardHeight }
+
+        var columnHeights = [CGFloat.zero, CGFloat.zero]
+        for index in 0..<normalizedCount {
+            let measuredHeight = index < cardHeights.count
+                ? cardHeights[index]
+                : cardHeight
+            let height = max(cardHeight, measuredHeight)
+            let column = index % 2
+            if columnHeights[column] > 0 {
+                columnHeights[column] += gridSpacing
+            }
+            columnHeights[column] += height
+        }
+        return max(columnHeights[0], columnHeights[1])
+    }
+
+    static func contentHeight(
+        forModuleCount count: Int,
+        cardHeights: [CGFloat] = [],
+        footerHeight: CGFloat = 40
+    ) -> CGFloat {
         let gridHeight = gridHeight(forModuleCount: count, cardHeights: cardHeights)
-        let outerPadding: CGFloat = 16 * 2
-        let headerHeight: CGFloat = 48
-        let periodSelectorHeight: CGFloat = 50
-        let footerHeight: CGFloat = 40
-        let stackSpacing: CGFloat = 10 * 3
-        return outerPadding + headerHeight + periodSelectorHeight + footerHeight + stackSpacing + gridHeight
+        return chromeHeight(footerHeight: footerHeight) + gridHeight
     }
 
     static func height(forModuleCount count: Int, cardHeights: [CGFloat] = []) -> CGFloat {
@@ -123,8 +156,10 @@ enum DashboardLayout {
         visibleFrame: CGRect? = nil
     ) -> CGSize {
         let contentHeight = contentHeight(forModuleCount: count, cardHeights: cardHeights)
-        _ = visibleFrame
-        return CGSize(width: width, height: contentHeight)
+        return CGSize(
+            width: width,
+            height: min(contentHeight, maximumHeight(for: visibleFrame))
+        )
     }
 }
 
@@ -140,6 +175,7 @@ struct DashboardPopover: View {
     @ObservedObject var store: UsageStore
     @ObservedObject private var providerOrder = ProviderOrderStore.shared
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
+    private let visibleFrame: CGRect?
     let onSizeChange: (CGSize) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var period: DashboardPeriod = .today
@@ -149,9 +185,11 @@ struct DashboardPopover: View {
 
     init(
         store: UsageStore,
+        visibleFrame: CGRect? = nil,
         onSizeChange: @escaping (CGSize) -> Void = { _ in }
     ) {
         self.store = store
+        self.visibleFrame = visibleFrame
         self.onSizeChange = onSizeChange
     }
 
@@ -186,63 +224,42 @@ struct DashboardPopover: View {
                 dashboardHeader
                 periodSelector
 
-                ScrollView(
-                    .vertical,
-                    showsIndicators: visibleSnapshots.count > DashboardLayout.maximumVisibleModuleCount
-                ) {
-                    ZStack(alignment: .topLeading) {
-                        LazyVGrid(
-                            columns: [
-                                GridItem(.flexible(), spacing: DashboardLayout.gridSpacing, alignment: .leading),
-                                GridItem(.flexible(), spacing: DashboardLayout.gridSpacing, alignment: .leading)
-                            ],
-                            alignment: .leading,
-                            spacing: DashboardLayout.gridSpacing
-                        ) {
-                            ForEach(visibleSnapshots) { snapshot in
-                                DashboardProviderCard(snapshot: snapshot, period: period)
-                                    .frame(maxWidth: .infinity, minHeight: DashboardLayout.cardHeight, alignment: .top)
-                                    .background(
-                                        GeometryReader { proxy in
-                                            Color.clear.preference(
-                                                key: DashboardCardHeightPreferenceKey.self,
-                                                value: [snapshot.id: proxy.size.height]
-                                            )
-                                        }
-                                    )
-                                    .transition(providerCardTransition)
+                ScrollViewReader { proxy in
+                    ScrollView(
+                        .vertical,
+                        showsIndicators: dashboardGridContentHeight > dashboardGridViewportHeight + 0.5
+                    ) {
+                        dashboardGrid
+                            .id("dashboard-grid-top")
+                    }
+                    .frame(height: dashboardGridViewportHeight, alignment: .top)
+                    .onChange(of: period) { _ in
+                        DispatchQueue.main.async {
+                            if reduceMotion {
+                                proxy.scrollTo("dashboard-grid-top", anchor: .top)
+                            } else {
+                                withAnimation(DashboardMotion.periodSelection) {
+                                    proxy.scrollTo("dashboard-grid-top", anchor: .top)
+                                }
                             }
                         }
-                        .animation(
-                            reduceMotion
-                                ? nil
-                                : (periodTransitionIsLongRange
-                                    ? DashboardMotion.longRangeContent
-                                    : DashboardMotion.periodContent),
-                            value: period
-                        )
                     }
                 }
-                .frame(
-                    height: visibleSnapshots.count > DashboardLayout.maximumVisibleModuleCount
-                        ? dashboardGridViewportHeight
-                        : nil,
-                    alignment: .top
-                )
 
-            dashboardFooter
-        }
-        .padding(16)
-        .frame(
-            width: DashboardLayout.referenceWidth,
-            height: dashboardContentHeight,
-            alignment: .topLeading
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.white.opacity(0.12), lineWidth: 1)
-        )
+                dashboardFooter
+                    .frame(height: dashboardFooterHeight, alignment: .top)
+            }
+            .padding(16)
+            .frame(
+                width: DashboardLayout.referenceWidth,
+                height: dashboardContentHeight,
+                alignment: .topLeading
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            )
         }
         .preferredColorScheme(.dark)
         .frame(width: dashboardWidth, height: dashboardHeight)
@@ -278,30 +295,94 @@ struct DashboardPopover: View {
         dashboardContentHeight * dashboardScale
     }
 
-    private var dashboardContentHeight: CGFloat {
-        let cardHeights = visibleSnapshots.prefix(DashboardLayout.maximumVisibleModuleCount).map {
+    private var dashboardMaximumHeight: CGFloat {
+        DashboardLayout.maximumHeight(for: visibleFrame)
+    }
+
+    private var dashboardFooterHeight: CGFloat {
+        hiddenProviderNames.isEmpty ? 24 : 46
+    }
+
+    private var dashboardGridContentHeight: CGFloat {
+        let cardHeights = visibleSnapshots.map {
             measuredCardHeights[$0.id] ?? DashboardLayout.cardHeight
         }
-        return DashboardLayout.contentHeight(
-            forModuleCount: min(
-                visibleSnapshots.count,
-                DashboardLayout.maximumVisibleModuleCount
-            ),
-            cardHeights: Array(cardHeights)
+        return DashboardLayout.gridHeight(
+            forModuleCount: visibleSnapshots.count,
+            cardHeights: cardHeights
         )
     }
 
+    private var dashboardContentHeight: CGFloat {
+        DashboardLayout.chromeHeight(footerHeight: dashboardFooterHeight)
+            + dashboardGridViewportHeight
+    }
+
     private var dashboardGridViewportHeight: CGFloat {
-        let cardHeights = visibleSnapshots
-            .prefix(DashboardLayout.maximumVisibleModuleCount)
-            .map { measuredCardHeights[$0.id] ?? DashboardLayout.cardHeight }
-        return DashboardLayout.gridHeight(
-            forModuleCount: min(
-                visibleSnapshots.count,
-                DashboardLayout.maximumVisibleModuleCount
-            ),
-            cardHeights: Array(cardHeights)
+        let visibleCardSnapshots = Array(
+            visibleSnapshots.prefix(DashboardLayout.maximumVisibleModuleCount)
         )
+        let cardHeights = visibleCardSnapshots.map {
+            measuredCardHeights[$0.id] ?? DashboardLayout.cardHeight
+        }
+        let naturalViewportHeight = DashboardLayout.gridHeight(
+            forModuleCount: visibleCardSnapshots.count,
+            cardHeights: cardHeights
+        )
+        let availableHeight = dashboardMaximumHeight
+            - DashboardLayout.chromeHeight(footerHeight: dashboardFooterHeight)
+        return min(naturalViewportHeight, max(1, availableHeight))
+    }
+
+    private var dashboardGrid: some View {
+        HStack(alignment: .top, spacing: DashboardLayout.gridSpacing) {
+            dashboardColumn(leftColumnSnapshots)
+            dashboardColumn(rightColumnSnapshots)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .animation(
+            reduceMotion
+                ? nil
+                : (periodTransitionIsLongRange
+                    ? DashboardMotion.longRangeContent
+                    : DashboardMotion.periodContent),
+            value: period
+        )
+    }
+
+    private var leftColumnSnapshots: [ProviderSnapshot] {
+        visibleSnapshots.enumerated().compactMap { index, snapshot in
+            index.isMultiple(of: 2) ? snapshot : nil
+        }
+    }
+
+    private var rightColumnSnapshots: [ProviderSnapshot] {
+        visibleSnapshots.enumerated().compactMap { index, snapshot in
+            index.isMultiple(of: 2) ? nil : snapshot
+        }
+    }
+
+    private func dashboardColumn(_ snapshots: [ProviderSnapshot]) -> some View {
+        VStack(alignment: .leading, spacing: DashboardLayout.gridSpacing) {
+            ForEach(snapshots) { snapshot in
+                dashboardCard(snapshot)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    private func dashboardCard(_ snapshot: ProviderSnapshot) -> some View {
+        DashboardProviderCard(snapshot: snapshot, period: period)
+            .frame(maxWidth: .infinity, minHeight: DashboardLayout.cardHeight, alignment: .top)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: DashboardCardHeightPreferenceKey.self,
+                        value: [snapshot.id: proxy.size.height]
+                    )
+                }
+            )
+            .transition(providerCardTransition)
     }
 
     private func reportDashboardSize() {
@@ -354,6 +435,7 @@ struct DashboardPopover: View {
                     Text("AI Usage Bar")
                         .font(.system(size: 23, weight: .bold, design: .rounded))
                     DashboardRefreshButton(store: store)
+                    DashboardUpdatePrompt()
                 }
                 Text(L10n.text(.overviewSubtitle, language: languageSettings.language))
                     .font(.system(size: 13, weight: .medium))
@@ -528,6 +610,10 @@ private struct DashboardProviderCard: View {
             // visible so the restored five-hour allowance is not hidden by
             // the weekly window.
             preferredWindows = [.fiveHours, .weekly, .billing]
+        case .kimi:
+            // KIMI Desktop exposes Kimi Code's independent rate limits along
+            // with the monthly shared membership Credits balance.
+            preferredWindows = [.fiveHours, .weekly, .monthly, .billing]
         case .miniMax, .chatGPT, .zcode, .openCode, .doubaoWork:
             preferredWindows = [.weekly, .fiveHours, .billing]
         case .workBuddy:
@@ -551,7 +637,7 @@ private struct DashboardProviderCard: View {
                     if lhsAggregate != rhsAggregate { return lhsAggregate }
                     return lhs.key < rhs.key
                 }
-            if snapshot.provider == .codex {
+            if snapshot.provider == .codex || snapshot.provider == .kimi {
                 selected.append(contentsOf: matches.filter { candidate in
                     !selected.contains(where: { $0.id == candidate.id })
                 })
@@ -639,7 +725,31 @@ private struct DashboardProviderCard: View {
     }
 
     private var primaryMetric: UsageMetric? {
-        metric(kind: .tokens) ?? metric(kind: .quota) ?? metric(kind: .credits) ?? metric(kind: .requests)
+        if snapshot.provider == .kimi {
+            // KIMI's quota rows are supplementary account information. Keep
+            // the headline aligned with the other activity cards by showing
+            // local usage for the selected period instead of a quota balance.
+            if let localTokens = metric(kind: .tokens) {
+                return localTokens
+            }
+            if let localRequests = metric(kind: .requests) {
+                return localRequests
+            }
+            return UsageMetric(
+                key: "kimi-primary-total",
+                title: "Token",
+                kind: .tokens,
+                window: period.preferredWindows.first ?? .today,
+                used: 0,
+                limit: nil,
+                remaining: nil,
+                unit: "tokens",
+                source: .local,
+                resetAt: nil,
+                note: "所选时间范围暂无本地用量"
+            )
+        }
+        return metric(kind: .tokens) ?? metric(kind: .quota) ?? metric(kind: .credits) ?? metric(kind: .requests)
     }
 
     private var requestMetric: UsageMetric? {
@@ -700,7 +810,7 @@ private struct DashboardProviderCard: View {
     }
 
     private var costUnit: String {
-        snapshot.provider == .deepSeekHarness ? "CNY" : "USD"
+        snapshot.provider == .deepSeekHarness || snapshot.provider == .kimi ? "CNY" : "USD"
     }
 
     private var stats: [DashboardStat] {
@@ -733,13 +843,13 @@ private struct DashboardProviderCard: View {
     @ViewBuilder
     private var balanceSection: some View {
         if !balancePresentations.isEmpty || resetCreditsAvailableCount != nil {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Rectangle()
                     .fill(Color.white.opacity(0.10))
                     .frame(height: 1)
 
                 ForEach(balancePresentations) { balance in
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 7) {
                             if balance.metric.unit.localizedCaseInsensitiveContains("credit") {
                                 Group {
@@ -814,7 +924,7 @@ private struct DashboardProviderCard: View {
                             .minimumScaleFactor(0.72)
                         }
                     }
-                    .padding(.top, 3)
+                    .padding(.top, 2)
                 }
 
                 HStack {
@@ -855,7 +965,7 @@ private struct DashboardProviderCard: View {
             modelSection
             balanceSection
         }
-        .padding(12)
+        .padding(11)
         .aiLiquidGlass(
             tint: DashboardPalette.color(for: snapshot.provider).opacity(0.18),
             cornerRadius: 20
@@ -914,7 +1024,7 @@ private struct DashboardProviderCard: View {
         LazyVGrid(
             columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)],
             alignment: .leading,
-            spacing: 8
+            spacing: 7
         ) {
             ForEach(stats) { stat in
                 DashboardStatView(stat: stat, accent: DashboardPalette.color(for: snapshot.provider))
@@ -923,7 +1033,7 @@ private struct DashboardProviderCard: View {
     }
 
     private var modelSection: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 6) {
             Button {
                 withAnimation(.easeOut(duration: 0.16)) {
                     isModelExpanded.toggle()
@@ -1029,6 +1139,12 @@ private struct DashboardProviderCard: View {
     }
 
     private func primaryValueText(_ metric: UsageMetric) -> String {
+        if metric.kind == .quota, let remaining = metric.remaining {
+            if metric.unit == "%" {
+                return "\(NumberFormat.compact(remaining))%"
+            }
+            return NumberFormat.compact(remaining)
+        }
         if let used = metric.used {
             if metric.kind == .money { return NumberFormat.currency(used, unit: metric.unit) }
             return NumberFormat.compact(used)
@@ -1361,6 +1477,82 @@ private struct DashboardRefreshButton: View {
     }
 }
 
+private struct DashboardUpdatePrompt: View {
+    @ObservedObject private var updater = AppUpdater.shared
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
+
+    @ViewBuilder
+    var body: some View {
+        switch updater.state {
+        case .available(let release):
+            Button {
+                updater.installUpdate()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 12, weight: .bold))
+                    Text(L10n.text(.update, language: languageSettings.language))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .foregroundStyle(.white.opacity(0.94))
+                .padding(.horizontal, 10)
+                .frame(height: 29)
+                .contentShape(Capsule())
+                .aiLiquidGlass(
+                    tint: DashboardPalette.success.opacity(0.24),
+                    cornerRadius: 15,
+                    interactive: true
+                )
+            }
+            .buttonStyle(.plain)
+            .help(
+                "\(L10n.text(.updateAvailable, language: languageSettings.language)) \(release.tag)"
+            )
+        case .downloading(let progress):
+            updateProgress(
+                text: L10n.text(.downloadingUpdate, language: languageSettings.language),
+                progress: progress
+            )
+        case .installing:
+            updateProgress(
+                text: L10n.text(.installingUpdate, language: languageSettings.language),
+                progress: nil
+            )
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private func updateProgress(text: String, progress: Double?) -> some View {
+        HStack(spacing: 6) {
+            if let progress {
+                ProgressView(value: progress, total: 1)
+                    .progressViewStyle(.circular)
+                    .controlSize(.small)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Text(
+                progress.map { "\(Int(($0 * 100).rounded()))%" } ?? text
+            )
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.78))
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.horizontal, 9)
+        .frame(height: 29)
+        .aiLiquidGlass(
+            tint: Color.white.opacity(0.10),
+            cornerRadius: 15,
+            interactive: false
+        )
+        .help(text)
+    }
+}
+
 private enum DashboardPalette {
     static let background = LinearGradient(
         colors: [Color(red: 0.10, green: 0.11, blue: 0.16), Color(red: 0.14, green: 0.15, blue: 0.21)],
@@ -1374,6 +1566,7 @@ private enum DashboardPalette {
     static func color(for provider: ProviderID) -> Color {
         switch provider {
         case .codex: return Color(red: 0.45, green: 0.78, blue: 1.0)
+        case .kimi: return Color(red: 0.48, green: 0.62, blue: 1.0)
         case .chatGPT: return Color(red: 0.35, green: 0.82, blue: 0.72)
         case .qwenWork: return Color(red: 0.42, green: 0.69, blue: 1.0)
         case .zcode: return Color(red: 0.34, green: 0.78, blue: 0.92)

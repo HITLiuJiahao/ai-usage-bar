@@ -32,6 +32,7 @@ final class StatusBarController: NSObject, ObservableObject {
     init(store: UsageStore) {
         self.store = store
         super.init()
+        AppUpdater.shared.startAutomaticChecks()
         configureStatusItem()
         configureContextMenu()
         store.$snapshots
@@ -134,6 +135,7 @@ final class StatusBarController: NSObject, ObservableObject {
         dashboardPanel.contentViewController = NSHostingController(
             rootView: DashboardPopover(
                 store: store,
+                visibleFrame: dashboardScreenVisibleFrame,
                 onSizeChange: { [weak self] size in
                     self?.updateDashboardSize(size)
                 }
@@ -192,7 +194,9 @@ final class StatusBarController: NSObject, ObservableObject {
     }
 
     private func updateDashboardSize(_ size: CGSize) {
-        let contentSize = NSSize(width: size.width, height: size.height)
+        let contentSize = constrainedDashboardSize(
+            NSSize(width: size.width, height: size.height)
+        )
         DispatchQueue.main.async { [weak self] in
             guard let self,
                   self.isDashboardPanelConfigured,
@@ -451,7 +455,9 @@ final class StatusBarController: NSObject, ObservableObject {
         let safeFrame = screen.visibleFrame.insetBy(dx: 12, dy: 12)
         var frame = dashboardPanel.frame
         if let contentSize {
-            frame.size = contentSize
+            frame.size = constrainedDashboardSize(contentSize, on: screen)
+        } else {
+            frame.size = constrainedDashboardSize(frame.size, on: screen)
         }
         guard frame.width > 0, frame.height > 0 else { return }
 
@@ -472,11 +478,23 @@ final class StatusBarController: NSObject, ObservableObject {
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.28
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 dashboardPanel.animator().setFrame(frame, display: true)
             }
         } else {
             dashboardPanel.setFrame(frame, display: true)
         }
+    }
+
+    private func constrainedDashboardSize(_ size: NSSize, on screen: NSScreen? = nil) -> NSSize {
+        guard size.width > 0, size.height > 0 else { return size }
+        let targetScreen = screen ?? statusItem?.button?.window?.screen ?? NSScreen.main
+        let visibleFrame = targetScreen?.visibleFrame
+        let maximumHeight = DashboardLayout.maximumHeight(for: visibleFrame)
+        return NSSize(
+            width: size.width,
+            height: min(size.height, maximumHeight)
+        )
     }
 
     private func configureContextMenu() {

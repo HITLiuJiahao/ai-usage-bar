@@ -555,7 +555,8 @@ enum UsageMetrics {
     static func localMetrics(
         summary: LocalUsageSummary,
         includeCredits: Bool = false,
-        includeMoney: Bool = false
+        includeMoney: Bool = false,
+        moneyUnit: String = "USD"
     ) -> [UsageMetric] {
         var metrics: [UsageMetric] = []
         let buckets: [(UsageWindow, UsageBucket)] = [
@@ -668,7 +669,7 @@ enum UsageMetrics {
                     used: bucket.cost,
                     limit: nil,
                     remaining: nil,
-                    unit: "USD",
+                    unit: moneyUnit,
                     source: .local,
                     resetAt: nil,
                     note: nil

@@ -2,6 +2,7 @@ import Foundation
 
 enum ProviderID: String, CaseIterable, Codable, Identifiable {
     case codex
+    case kimi
     case chatGPT
     case qwenWork
     case zcode
@@ -16,7 +17,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
 
     // Keep the dashboard order stable for the two-column layout.
     static let trackedCases: [ProviderID] = [
-        .codex, .qwenWork, .zcode, .doubaoWork,
+        .codex, .kimi, .qwenWork, .zcode, .doubaoWork,
         .workBuddy, .miniMax,
         .openCode, .qianwenOffice, .deepSeekHarness
     ]
@@ -32,6 +33,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
     var symbolName: String {
         switch self {
         case .codex: return "terminal"
+        case .kimi: return "sparkles"
         case .chatGPT: return "bubble.left.and.bubble.right"
         case .qwenWork: return "sparkles"
         case .zcode: return "chevron.left.forwardslash.chevron.right"

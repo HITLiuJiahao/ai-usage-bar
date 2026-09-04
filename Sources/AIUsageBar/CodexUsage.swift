@@ -192,6 +192,10 @@ enum CodexPricing {
             // Tokei price table uses the canonical provider IDs.
             "kimi-k3": "moonshotai/kimi-k3",
             "kimi-k3-1": "moonshotai/kimi-k3",
+            "k3-agent": "moonshotai/kimi-k3",
+            "k3-agent-swarm": "moonshotai/kimi-k3",
+            "kimi/k3-agent": "moonshotai/kimi-k3",
+            "kimi/k3-agent-swarm": "moonshotai/kimi-k3",
             "hy3": "tencent/hy3",
             "hy3-preview": "tencent/hy3-preview",
             "qwen/qwen3.8-max": "qwen3.8-max",
