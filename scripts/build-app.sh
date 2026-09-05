@@ -52,6 +52,17 @@ done
 codesign --force --deep --sign - "$STAGED_APP" >/dev/null
 codesign --verify --deep --strict "$STAGED_APP"
 
+# Create the distributable from the clean, signed staging copy before putting
+# anything into the synced workspace.  File Provider can attach Finder
+# metadata to the destination app immediately after the copy; archiving the
+# staging copy keeps that metadata out of the downloadable application.
+mkdir -p "$PROJECT_ROOT/dist"
+RELEASE_ZIP_PATH="$PROJECT_ROOT/dist/AIUsageBar-arm64.zip"
+RELEASE_CHECKSUM_PATH="$RELEASE_ZIP_PATH.sha256"
+rm -f "$RELEASE_ZIP_PATH" "$RELEASE_CHECKSUM_PATH"
+ditto -c -k --norsrc --keepParent "$STAGED_APP" "$RELEASE_ZIP_PATH"
+shasum -a 256 "$RELEASE_ZIP_PATH" > "$RELEASE_CHECKSUM_PATH"
+
 mkdir -p "$(dirname "$APP_PATH")"
 rm -rf "$APP_PATH"
 ditto --norsrc "$STAGED_APP" "$APP_PATH"
@@ -63,16 +74,13 @@ find "$APP_PATH" -print0 | while IFS= read -r -d '' entry_path; do
     xattr -d 'com.apple.fileprovider.fpfs#P' "$entry_path" 2>/dev/null || true
     xattr -d com.apple.provenance "$entry_path" 2>/dev/null || true
 done
-codesign --verify --deep --strict "$APP_PATH"
-
-# Keep a stable Apple Silicon archive name for GitHub Releases. GitHub exposes
-# the uploaded asset digest through its Releases API, while the sidecar is
-# also useful for manually verifying a download before publishing it.
-RELEASE_ZIP_PATH="$PROJECT_ROOT/dist/AIUsageBar-arm64.zip"
-RELEASE_CHECKSUM_PATH="$RELEASE_ZIP_PATH.sha256"
-rm -f "$RELEASE_ZIP_PATH" "$RELEASE_CHECKSUM_PATH"
-ditto -c -k --norsrc --keepParent "$APP_PATH" "$RELEASE_ZIP_PATH"
-shasum -a 256 "$RELEASE_ZIP_PATH" > "$RELEASE_CHECKSUM_PATH"
+# The synced workspace may reattach metadata after the cleanup above. The
+# staging copy and the ZIP were already verified before that copy; keep the
+# convenience app even when the workspace provider makes this final check
+# fail, and report the reason instead of discarding the release artifact.
+if ! codesign --verify --deep --strict "$APP_PATH"; then
+    echo "警告：工作区同步目录给直接 .app 附加了 Finder 元数据；洁净临时包与下载 ZIP 已通过签名校验。" >&2
+fi
 
 echo "已生成：$APP_PATH"
 echo "已生成更新包：$RELEASE_ZIP_PATH"

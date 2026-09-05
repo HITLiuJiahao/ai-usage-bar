@@ -105,27 +105,28 @@ enum DashboardLayout {
         )
     }
 
-    // Cards are arranged as two natural-height columns. This avoids making a
-    // short card as tall as a neighboring quota-heavy card while preserving
-    // the original row-major provider order (even indexes on the left,
-    // odd indexes on the right).
+    // Two provider cards share one grid row. Use the taller card's measured
+    // height for that row so the left and right cards stay aligned, while
+    // preserving the row-major provider order.
     static func gridHeight(forModuleCount count: Int, cardHeights: [CGFloat] = []) -> CGFloat {
         let normalizedCount = max(count, 0)
-        guard normalizedCount > 0 else { return cardHeight }
+        let rowCount = max(1, (normalizedCount + 1) / 2)
+        var gridHeight: CGFloat = 0
 
-        var columnHeights = [CGFloat.zero, CGFloat.zero]
-        for index in 0..<normalizedCount {
-            let measuredHeight = index < cardHeights.count
-                ? cardHeights[index]
+        for row in 0..<rowCount {
+            let firstIndex = row * 2
+            let firstHeight = firstIndex < cardHeights.count
+                ? cardHeights[firstIndex]
                 : cardHeight
-            let height = max(cardHeight, measuredHeight)
-            let column = index % 2
-            if columnHeights[column] > 0 {
-                columnHeights[column] += gridSpacing
-            }
-            columnHeights[column] += height
+            let secondIndex = firstIndex + 1
+            let secondHeight = secondIndex < cardHeights.count
+                ? cardHeights[secondIndex]
+                : cardHeight
+            gridHeight += max(cardHeight, max(firstHeight, secondHeight))
         }
-        return max(columnHeights[0], columnHeights[1])
+
+        gridHeight += CGFloat(max(rowCount - 1, 0)) * gridSpacing
+        return gridHeight
     }
 
     static func contentHeight(
@@ -335,9 +336,30 @@ struct DashboardPopover: View {
     }
 
     private var dashboardGrid: some View {
-        HStack(alignment: .top, spacing: DashboardLayout.gridSpacing) {
-            dashboardColumn(leftColumnSnapshots)
-            dashboardColumn(rightColumnSnapshots)
+        VStack(alignment: .leading, spacing: DashboardLayout.gridSpacing) {
+            // SwiftUI's LazyVGrid centers items vertically within a row when
+            // their heights differ. Build each row explicitly so both cards
+            // use the same measured height, keeping both the top and bottom
+            // edges aligned.
+            ForEach(Array(stride(from: 0, to: visibleSnapshots.count, by: 2)), id: \.self) { startIndex in
+                let rowHeight = dashboardRowHeight(startIndex: startIndex)
+                HStack(alignment: .top, spacing: DashboardLayout.gridSpacing) {
+                    dashboardCard(
+                        visibleSnapshots[startIndex],
+                        equalizedHeight: rowHeight
+                    )
+
+                    if startIndex + 1 < visibleSnapshots.count {
+                        dashboardCard(
+                            visibleSnapshots[startIndex + 1],
+                            equalizedHeight: rowHeight
+                        )
+                    } else {
+                        Color.clear
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .animation(
@@ -350,38 +372,22 @@ struct DashboardPopover: View {
         )
     }
 
-    private var leftColumnSnapshots: [ProviderSnapshot] {
-        visibleSnapshots.enumerated().compactMap { index, snapshot in
-            index.isMultiple(of: 2) ? snapshot : nil
-        }
+    private func dashboardRowHeight(startIndex: Int) -> CGFloat? {
+        let rowSnapshots = visibleSnapshots[startIndex ..< min(startIndex + 2, visibleSnapshots.count)]
+        let heights = rowSnapshots.compactMap { measuredCardHeights[$0.id] }
+        guard heights.count == rowSnapshots.count else { return nil }
+        return max(DashboardLayout.cardHeight, heights.max() ?? DashboardLayout.cardHeight)
     }
 
-    private var rightColumnSnapshots: [ProviderSnapshot] {
-        visibleSnapshots.enumerated().compactMap { index, snapshot in
-            index.isMultiple(of: 2) ? nil : snapshot
-        }
-    }
-
-    private func dashboardColumn(_ snapshots: [ProviderSnapshot]) -> some View {
-        VStack(alignment: .leading, spacing: DashboardLayout.gridSpacing) {
-            ForEach(snapshots) { snapshot in
-                dashboardCard(snapshot)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .top)
-    }
-
-    private func dashboardCard(_ snapshot: ProviderSnapshot) -> some View {
-        DashboardProviderCard(snapshot: snapshot, period: period)
-            .frame(maxWidth: .infinity, minHeight: DashboardLayout.cardHeight, alignment: .top)
-            .background(
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: DashboardCardHeightPreferenceKey.self,
-                        value: [snapshot.id: proxy.size.height]
-                    )
-                }
-            )
+    private func dashboardCard(
+        _ snapshot: ProviderSnapshot,
+        equalizedHeight: CGFloat?
+    ) -> some View {
+        DashboardProviderCard(
+            snapshot: snapshot,
+            period: period,
+            equalizedHeight: equalizedHeight
+        )
             .transition(providerCardTransition)
     }
 
@@ -586,6 +592,7 @@ private struct BalancePresentation: Identifiable {
 private struct DashboardProviderCard: View {
     let snapshot: ProviderSnapshot
     let period: DashboardPeriod
+    let equalizedHeight: CGFloat?
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
     @State private var isModelExpanded = false
 
@@ -954,7 +961,7 @@ private struct DashboardProviderCard: View {
         return formatter
     }()
 
-    var body: some View {
+    private var cardContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             cardHeader
             Spacer(minLength: 2)
@@ -966,6 +973,35 @@ private struct DashboardProviderCard: View {
             balanceSection
         }
         .padding(11)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: DashboardCardHeightPreferenceKey.self,
+                    value: [snapshot.id: proxy.size.height]
+                )
+            }
+        )
+    }
+
+    var body: some View {
+        Group {
+            if let equalizedHeight {
+                cardContent
+                    .frame(
+                        height: max(equalizedHeight, DashboardLayout.cardHeight),
+                        alignment: .top
+                    )
+                    .frame(maxWidth: .infinity)
+            } else {
+                cardContent
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: DashboardLayout.cardHeight,
+                        alignment: .top
+                    )
+            }
+        }
         .aiLiquidGlass(
             tint: DashboardPalette.color(for: snapshot.provider).opacity(0.18),
             cornerRadius: 20
