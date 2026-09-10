@@ -3,8 +3,10 @@ import Combine
 import SwiftUI
 
 @MainActor
-final class StatusBarController: NSObject, ObservableObject {
+final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
     private let store: UsageStore
+    private let desktopPetStore: DesktopPetStore
+    private let petEventSocketServer: PetEventSocketServer
     private let dashboardPanel = NSPanel(
         contentRect: .zero,
         styleMask: [.borderless, .nonactivatingPanel],
@@ -28,9 +30,13 @@ final class StatusBarController: NSObject, ObservableObject {
     private var isDashboardPanelConfigured = false
     private var isEdgeDockConfigured = false
     private var isEdgeDockHiding = false
+    private var hasDashboardPosition = false
+    private let dashboardFrameAutosaveName = "AIUsageBar.dashboard"
 
     init(store: UsageStore) {
         self.store = store
+        desktopPetStore = .shared
+        petEventSocketServer = PetEventSocketServer(store: .shared)
         super.init()
         AppUpdater.shared.startAutomaticChecks()
         configureStatusItem()
@@ -39,6 +45,18 @@ final class StatusBarController: NSObject, ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.updateStatusItem()
+            }
+            .store(in: &cancellables)
+        store.$snapshots
+            .receive(on: RunLoop.main)
+            .sink { [weak self] snapshots in
+                self?.desktopPetStore.ingest(snapshots: snapshots)
+            }
+            .store(in: &cancellables)
+        desktopPetStore.$preferences
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.configureContextMenu()
             }
             .store(in: &cancellables)
         AppLanguageSettings.shared.$language
@@ -56,6 +74,8 @@ final class StatusBarController: NSObject, ObservableObject {
         DispatchQueue.main.async { [weak self] in
             self?.configureDashboardPanel()
             self?.configureEdgeDockPanel()
+            DesktopPetWindowController.shared.start()
+            self?.petEventSocketServer.start()
         }
 
         NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
@@ -72,6 +92,7 @@ final class StatusBarController: NSObject, ObservableObject {
     }
 
     deinit {
+        petEventSocketServer.stop()
         edgeDockHideTask?.cancel()
         if let edgeDockLocalMouseMonitor {
             NSEvent.removeMonitor(edgeDockLocalMouseMonitor)
@@ -103,7 +124,10 @@ final class StatusBarController: NSObject, ObservableObject {
         let statusQuota = store.codexStatusQuota
         if let statusQuota {
             let remaining = statusQuota.remaining
-            button.image = CodexQuotaStatusImage.make(remainingPercent: remaining)
+            button.image = CodexQuotaStatusImage.make(
+                remainingPercent: remaining,
+                usesWeeklyWarningStyle: statusQuota.isWeeklyQuotaWarning
+            )
             button.attributedTitle = NSAttributedString(
                 string: "\(remaining)%",
                 attributes: [
@@ -150,7 +174,20 @@ final class StatusBarController: NSObject, ObservableObject {
         dashboardPanel.isOpaque = false
         dashboardPanel.backgroundColor = .clear
         dashboardPanel.hasShadow = true
-        dashboardPanel.isMovable = false
+        dashboardPanel.isMovable = true
+        dashboardPanel.isMovableByWindowBackground = true
+        dashboardPanel.delegate = self
+        dashboardPanel.setFrameAutosaveName(dashboardFrameAutosaveName)
+        hasDashboardPosition = dashboardPanel.setFrameUsingName(dashboardFrameAutosaveName)
+        // A previous build allowed resizing and may have saved a scaled frame.
+        // Keep its position, but restore the fixed-size canvas immediately.
+        let resetSize = DashboardLayout.fittingSize(
+            forModuleCount: 0,
+            visibleFrame: dashboardScreenVisibleFrame
+        )
+        dashboardPanel.setContentSize(
+            NSSize(width: resetSize.width, height: resetSize.height)
+        )
         dashboardPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isDashboardPanelConfigured = true
     }
@@ -208,7 +245,10 @@ final class StatusBarController: NSObject, ObservableObject {
             let heightChanged = abs(currentSize.height - contentSize.height) > 0.5
             if widthChanged || heightChanged {
                 if self.dashboardPanel.isVisible {
-                    self.positionDashboardPanel(contentSize: contentSize, animated: true)
+                    self.positionDashboardPanel(
+                        contentSize: contentSize,
+                        animated: false
+                    )
                 } else {
                     self.dashboardPanel.setContentSize(contentSize)
                 }
@@ -437,7 +477,8 @@ final class StatusBarController: NSObject, ObservableObject {
         contentSize: NSSize? = nil,
         animated: Bool = false
     ) {
-        guard let screen = statusItem?.button?.window?.screen
+        guard let screen = dashboardPanel.screen
+                ?? statusItem?.button?.window?.screen
                 ?? NSScreen.main
                 ?? NSScreen.screens.first
         else { return }
@@ -461,20 +502,34 @@ final class StatusBarController: NSObject, ObservableObject {
         }
         guard frame.width > 0, frame.height > 0 else { return }
 
-        // Use the screen center instead of the status-item anchor. The old
-        // anchor-based placement could push the restored wide canvas off the
-        // left edge when the status item was near the right edge.
-        let targetX = screen.visibleFrame.midX - frame.width / 2
-
-        // Always open below the menu bar. Never move the panel above the
-        // status item: that would put it over the menu bar and hide the icon.
-        let targetY = (buttonScreenFrame?.minY ?? screen.visibleFrame.maxY)
-            - frame.height - 6
-
+        // Period changes can alter the dashboard's intrinsic height. Keep the
+        // top edge stable while the lower edge grows or shrinks, so the
+        // header and period selector do not jump with the window. If the new
+        // size would leave the panel outside the visible area, the clamping
+        // below remains the final authority.
+        let currentTop = dashboardPanel.frame.maxY
+        let isAutomaticContentResize = contentSize != nil && hasDashboardPosition
         let maximumX = max(safeFrame.minX, safeFrame.maxX - frame.width)
         let maximumY = max(safeFrame.minY, safeFrame.maxY - frame.height)
-        frame.origin.x = min(max(targetX, safeFrame.minX), maximumX)
-        frame.origin.y = min(max(targetY, safeFrame.minY), maximumY)
+        if hasDashboardPosition {
+            // Keep a user's chosen position when the display configuration
+            // changes. Content-driven height changes are top-anchored so the
+            // dashboard grows downward instead of moving both edges.
+            frame.origin.x = min(max(frame.origin.x, safeFrame.minX), maximumX)
+            if isAutomaticContentResize {
+                frame.origin.y = currentTop - frame.height
+            }
+            frame.origin.y = min(max(frame.origin.y, safeFrame.minY), maximumY)
+        } else {
+            // The first presentation still opens in a predictable place,
+            // below the menu bar and centered on the current display.
+            let targetX = screen.visibleFrame.midX - frame.width / 2
+            let targetY = (buttonScreenFrame?.minY ?? screen.visibleFrame.maxY)
+                - frame.height - 6
+            frame.origin.x = min(max(targetX, safeFrame.minX), maximumX)
+            frame.origin.y = min(max(targetY, safeFrame.minY), maximumY)
+        }
+        hasDashboardPosition = true
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.28
@@ -524,6 +579,20 @@ final class StatusBarController: NSObject, ObservableObject {
         )
         settings.target = self
         contextMenu.addItem(settings)
+
+        let petTitle = desktopPetStore.preferences.isEnabled
+            ? PetUI.text("隐藏桌面宠物", "Hide Desktop Pet")
+            : PetUI.text("显示桌面宠物", "Show Desktop Pet")
+        let petShortcut = desktopPetStore.preferences.isEnabled
+            ? desktopPetStore.hidePetShortcut.displayName
+            : desktopPetStore.showPetShortcut.displayName
+        let pet = NSMenuItem(
+            title: "\(petTitle) (\(petShortcut))",
+            action: #selector(toggleDesktopPet),
+            keyEquivalent: ""
+        )
+        pet.target = self
+        contextMenu.addItem(pet)
 
         contextMenu.addItem(.separator())
 
@@ -589,6 +658,20 @@ final class StatusBarController: NSObject, ObservableObject {
     private func closeDashboard() {
         dashboardPanel.orderOut(nil)
         removeOutsideClickMonitors()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window === dashboardPanel else { return }
+        hasDashboardPosition = true
+        dashboardPanel.saveFrame(usingName: dashboardFrameAutosaveName)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window === dashboardPanel else { return }
+        hasDashboardPosition = true
+        dashboardPanel.saveFrame(usingName: dashboardFrameAutosaveName)
     }
 
     private func installOutsideClickMonitors() {
@@ -670,6 +753,14 @@ final class StatusBarController: NSObject, ObservableObject {
         SettingsWindowController.shared.show()
     }
 
+    @objc private func toggleDesktopPet() {
+        if desktopPetStore.preferences.isEnabled {
+            DesktopPetWindowController.shared.hidePet()
+        } else {
+            DesktopPetWindowController.shared.showPet()
+        }
+    }
+
     @objc private func openDashboardFromMenu() {
         showDashboard()
     }
@@ -681,7 +772,7 @@ final class StatusBarController: NSObject, ObservableObject {
 }
 
 private enum CodexQuotaStatusImage {
-    static func make(remainingPercent: Int) -> NSImage {
+    static func make(remainingPercent: Int, usesWeeklyWarningStyle: Bool) -> NSImage {
         let size = NSSize(width: 15, height: 15)
         let image = NSImage(size: size)
         image.lockFocus()
@@ -714,7 +805,10 @@ private enum CodexQuotaStatusImage {
             endAngle: 90 - (360 * CGFloat(clamped) / 100),
             clockwise: true
         )
-        NSColor.systemBlue.setStroke()
+        let accent = usesWeeklyWarningStyle
+            ? NSColor(calibratedRed: 1.0, green: 0.58, blue: 0.60, alpha: 1)
+            : .systemBlue
+        accent.setStroke()
         progress.stroke()
         return image
     }

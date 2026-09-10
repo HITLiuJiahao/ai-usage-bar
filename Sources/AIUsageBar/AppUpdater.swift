@@ -11,9 +11,20 @@ struct AppUpdateRelease: Equatable {
     let releaseURL: URL
 }
 
+enum AppUpdateNetworkIssue: Equatable {
+    case offline
+    case dns
+    case connection
+    case timeout
+    case secureConnection
+    case rateLimited
+    case httpStatus(Int)
+    case unknown
+}
+
 enum AppUpdateFailure: Error, Equatable {
     case noRelease
-    case network
+    case network(AppUpdateNetworkIssue)
     case invalidMetadata
     case untrustedURL
     case missingChecksum
@@ -56,7 +67,8 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     static let automaticCheckInterval: TimeInterval = 6 * 60 * 60
 
     private static let lastCheckDefaultsKey = "aiUsageBar.lastUpdateCheck"
-    private static let currentVersionFallback = "0.2.0"
+    private static let currentVersionFallback = "0.3.1"
+    private static let releaseAssetName = "AIUsageBar-arm64.zip"
 
     @Published private(set) var state: AppUpdateState = .idle
 
@@ -64,12 +76,18 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     private let metadataURL = URL(
         string: "https://api.github.com/repos/\(repositoryOwner)/\(repositoryName)/releases/latest"
     )!
+    private let releasePageURL = URL(
+        string: "https://github.com/\(repositoryOwner)/\(repositoryName)/releases/latest"
+    )!
     private var session: URLSession!
     private var automaticCheckTimer: Timer?
     private var metadataTask: URLSessionDataTask?
+    private var releasePageTask: URLSessionDataTask?
+    private var checksumTask: URLSessionDataTask?
     private var downloadTask: URLSessionDownloadTask?
     private var expectedSHA256: String?
     private var activeRelease: AppUpdateRelease?
+    private var activeCheckIdentifier: UUID?
     private var isManualCheck = false
 
     static var currentVersion: String {
@@ -97,7 +115,7 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
 
     deinit {
         automaticCheckTimer?.invalidate()
-        metadataTask?.cancel()
+        cancelCheckTasks()
         downloadTask?.cancel()
         session.invalidateAndCancel()
     }
@@ -128,12 +146,16 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         // rather than being replaced by a later background check.
         if case .available = state { return }
 
-        metadataTask?.cancel()
-        metadataTask = nil
+        cancelCheckTasks()
+        let checkIdentifier = UUID()
+        activeCheckIdentifier = checkIdentifier
         isManualCheck = manual
         UserDefaults.standard.set(Date(), forKey: Self.lastCheckDefaultsKey)
         state = .checking
+        startMetadataCheck(checkIdentifier)
+    }
 
+    private func startMetadataCheck(_ checkIdentifier: UUID) {
         var request = URLRequest(
             url: metadataURL,
             cachePolicy: .reloadIgnoringLocalCacheData,
@@ -142,11 +164,17 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("AIUsageBar/\(Self.currentVersion)", forHTTPHeaderField: "User-Agent")
 
-        metadataTask = session.dataTask(with: request) { [weak self] data, response, error in
-            guard let self else { return }
-            self.handleMetadataResponse(data: data, response: response, error: error)
+        let task = session.dataTask(with: request) { [weak self] data, response, error in
+            guard let self, self.isCurrentCheck(checkIdentifier) else { return }
+            self.handleMetadataResponse(
+                data: data,
+                response: response,
+                error: error,
+                checkIdentifier: checkIdentifier
+            )
         }
-        metadataTask?.resume()
+        metadataTask = task
+        task.resume()
     }
 
     func installUpdate() {
@@ -194,19 +222,26 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     private func handleMetadataResponse(
         data: Data?,
         response: URLResponse?,
-        error: Error?
+        error: Error?,
+        checkIdentifier: UUID
     ) {
+        guard isCurrentCheck(checkIdentifier) else { return }
         metadataTask = nil
 
-        if let error, (error as NSError).code == NSURLErrorCancelled {
+        if let error, Self.isCancellation(error) {
             return
         }
 
-        guard error == nil,
-              let httpResponse = response as? HTTPURLResponse,
-              Self.isAllowedMetadataURL(httpResponse.url),
-              let responseData = data else {
-            finishCheck(.failure(.network))
+        if error != nil || response == nil || data == nil {
+            startReleasePageFallback(checkIdentifier)
+            return
+        }
+        guard let httpResponse = response as? HTTPURLResponse else {
+            startReleasePageFallback(checkIdentifier)
+            return
+        }
+        guard Self.isAllowedMetadataURL(httpResponse.url) else {
+            finishCheck(.failure(.untrustedURL))
             return
         }
 
@@ -215,16 +250,18 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
             return
         }
         guard (200..<300).contains(httpResponse.statusCode) else {
-            finishCheck(.failure(.network))
+            startReleasePageFallback(checkIdentifier)
             return
         }
 
-        guard let json = try? JSONSerialization.jsonObject(
+        guard let responseData = data,
+              let json = try? JSONSerialization.jsonObject(
             with: responseData,
             options: []
         ) as? [String: Any],
-        let tag = Self.releaseTag(from: json) else {
-            finishCheck(.failure(.invalidMetadata))
+        let tag = Self.releaseTag(from: json),
+        Self.versionParts(tag) != nil else {
+            startReleasePageFallback(checkIdentifier)
             return
         }
 
@@ -234,13 +271,173 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         }
 
         guard let release = Self.validatedRelease(from: json, tag: tag) else {
-            finishCheck(.failure(.invalidMetadata))
+            // GitHub can omit asset digests on older API responses. The
+            // release page plus our published sidecar remains verifiable.
+            startReleasePageFallback(checkIdentifier)
             return
         }
         finishCheck(.success(release))
     }
 
+    /// GitHub's browser-facing `/releases/latest` redirect is independent of
+    /// the rate-limited REST API. It gives us a strict release tag; the ZIP's
+    /// published SHA-256 sidecar preserves the same trust model as the API.
+    private func startReleasePageFallback(_ checkIdentifier: UUID) {
+        guard isCurrentCheck(checkIdentifier),
+              releasePageTask == nil,
+              checksumTask == nil else { return }
+
+        var request = URLRequest(
+            url: releasePageURL,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: 15
+        )
+        request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
+        request.setValue("AIUsageBar/\(Self.currentVersion)", forHTTPHeaderField: "User-Agent")
+
+        let task = session.dataTask(with: request) { [weak self] data, response, error in
+            guard let self, self.isCurrentCheck(checkIdentifier) else { return }
+            self.handleReleasePageResponse(
+                data: data,
+                response: response,
+                error: error,
+                checkIdentifier: checkIdentifier
+            )
+        }
+        releasePageTask = task
+        task.resume()
+    }
+
+    private func handleReleasePageResponse(
+        data: Data?,
+        response: URLResponse?,
+        error: Error?,
+        checkIdentifier: UUID
+    ) {
+        guard isCurrentCheck(checkIdentifier) else { return }
+        releasePageTask = nil
+
+        if let error, Self.isCancellation(error) { return }
+        guard error == nil,
+              let httpResponse = response as? HTTPURLResponse else {
+            finishCheck(.failure(Self.networkFailure(error: error, response: response)))
+            return
+        }
+        guard Self.isAllowedReleasePageURL(httpResponse.url) else {
+            finishCheck(.failure(.untrustedURL))
+            return
+        }
+        if httpResponse.statusCode == 404 {
+            finishCheck(.failure(.noRelease))
+            return
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            finishCheck(.failure(Self.networkFailure(error: nil, response: httpResponse)))
+            return
+        }
+        guard let finalURL = httpResponse.url,
+              let tag = Self.releaseTag(fromReleasePageURL: finalURL),
+              Self.versionParts(tag) != nil else {
+            finishCheck(.failure(.invalidMetadata))
+            return
+        }
+        guard Self.isNewerVersion(tag, than: Self.currentVersion) else {
+            finishCheck(.success(nil))
+            return
+        }
+        guard let checksumURL = Self.releaseAssetURL(
+            tag: tag,
+            assetName: "\(Self.releaseAssetName).sha256"
+        ) else {
+            finishCheck(.failure(.invalidMetadata))
+            return
+        }
+        startChecksumFallback(
+            checkIdentifier,
+            tag: tag,
+            releaseURL: finalURL,
+            checksumURL: checksumURL
+        )
+    }
+
+    private func startChecksumFallback(
+        _ checkIdentifier: UUID,
+        tag: String,
+        releaseURL: URL,
+        checksumURL: URL
+    ) {
+        guard isCurrentCheck(checkIdentifier), checksumTask == nil else { return }
+
+        var request = URLRequest(
+            url: checksumURL,
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: 15
+        )
+        request.setValue("text/plain", forHTTPHeaderField: "Accept")
+        request.setValue("AIUsageBar/\(Self.currentVersion)", forHTTPHeaderField: "User-Agent")
+
+        let task = session.dataTask(with: request) { [weak self] data, response, error in
+            guard let self, self.isCurrentCheck(checkIdentifier) else { return }
+            self.handleChecksumResponse(
+                data: data,
+                response: response,
+                error: error,
+                checkIdentifier: checkIdentifier,
+                tag: tag,
+                releaseURL: releaseURL
+            )
+        }
+        checksumTask = task
+        task.resume()
+    }
+
+    private func handleChecksumResponse(
+        data: Data?,
+        response: URLResponse?,
+        error: Error?,
+        checkIdentifier: UUID,
+        tag: String,
+        releaseURL: URL
+    ) {
+        guard isCurrentCheck(checkIdentifier) else { return }
+        checksumTask = nil
+
+        if let error, Self.isCancellation(error) { return }
+        guard error == nil,
+              let httpResponse = response as? HTTPURLResponse else {
+            finishCheck(.failure(Self.networkFailure(error: error, response: response)))
+            return
+        }
+        guard let responseURL = httpResponse.url,
+              Self.isAllowedDownloadResponseURL(responseURL) else {
+            finishCheck(.failure(.untrustedURL))
+            return
+        }
+        if httpResponse.statusCode == 404 {
+            finishCheck(.failure(.missingChecksum))
+            return
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            finishCheck(.failure(Self.networkFailure(error: nil, response: httpResponse)))
+            return
+        }
+        guard let sha256 = Self.sha256FromSidecar(data),
+              let downloadURL = Self.releaseAssetURL(tag: tag, assetName: Self.releaseAssetName) else {
+            finishCheck(.failure(.missingChecksum))
+            return
+        }
+        finishCheck(.success(AppUpdateRelease(
+            tag: tag,
+            downloadURL: downloadURL,
+            sha256: sha256,
+            assetName: Self.releaseAssetName,
+            releaseURL: releaseURL
+        )))
+    }
+
     private func finishCheck(_ result: Result<AppUpdateRelease?, AppUpdateFailure>) {
+        activeCheckIdentifier = nil
+        cancelCheckTasks()
         switch result {
         case .success(let release):
             if let release {
@@ -255,6 +452,19 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
                 state = .idle
             }
         }
+    }
+
+    private func isCurrentCheck(_ checkIdentifier: UUID) -> Bool {
+        activeCheckIdentifier == checkIdentifier
+    }
+
+    private func cancelCheckTasks() {
+        metadataTask?.cancel()
+        releasePageTask?.cancel()
+        checksumTask?.cancel()
+        metadataTask = nil
+        releasePageTask = nil
+        checksumTask = nil
     }
 
     private func setTransientState(_ nextState: AppUpdateState, delay: TimeInterval) {
@@ -356,11 +566,22 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         }
 
         let isDownload = task.taskIdentifier == downloadTask?.taskIdentifier
-        let allowed = isDownload
-            ? Self.isAllowedDownloadResponseURL(redirectURL)
-            : Self.isAllowedMetadataURL(redirectURL)
-        if !allowed, isDownload {
-            failDownload(.untrustedURL)
+        let isReleasePage = task.taskIdentifier == releasePageTask?.taskIdentifier
+        let isChecksum = task.taskIdentifier == checksumTask?.taskIdentifier
+        let allowed: Bool
+        if isDownload || isChecksum {
+            allowed = Self.isAllowedDownloadResponseURL(redirectURL)
+        } else if isReleasePage {
+            allowed = Self.isAllowedReleasePageURL(redirectURL)
+        } else {
+            allowed = Self.isAllowedMetadataURL(redirectURL)
+        }
+        if !allowed {
+            if isDownload {
+                failDownload(.untrustedURL)
+            } else {
+                finishCheck(.failure(.untrustedURL))
+            }
         }
         completionHandler(allowed ? request : nil)
     }
@@ -372,8 +593,8 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     ) {
         guard task.taskIdentifier == downloadTask?.taskIdentifier,
               let error else { return }
-        if (error as NSError).code == NSURLErrorCancelled { return }
-        failDownload(.network)
+        if Self.isCancellation(error) { return }
+        failDownload(Self.networkFailure(error: error, response: task.response))
     }
 
     private func failDownload(_ failure: AppUpdateFailure) {
@@ -652,6 +873,16 @@ private extension AppUpdater {
         return isAllowedHTTPSURL(url, hosts: metadataHosts)
     }
 
+    static func isAllowedReleasePageURL(_ url: URL?) -> Bool {
+        guard let url,
+              isAllowedHTTPSURL(url, hosts: downloadSourceHosts) else {
+            return false
+        }
+        let releasePrefix = "/\(repositoryOwner)/\(repositoryName)/releases/"
+        return url.path == "\(releasePrefix)latest"
+            || url.path.hasPrefix("\(releasePrefix)tag/")
+    }
+
     static func isAllowedDownloadSourceURL(_ url: URL) -> Bool {
         isAllowedHTTPSURL(url, hosts: downloadSourceHosts)
     }
@@ -675,6 +906,71 @@ private extension AppUpdater {
             return false
         }
         return true
+    }
+
+    static func releaseTag(fromReleasePageURL url: URL) -> String? {
+        guard isAllowedReleasePageURL(url) else { return nil }
+        let prefix = "/\(repositoryOwner)/\(repositoryName)/releases/tag/"
+        guard url.path.hasPrefix(prefix) else { return nil }
+        let rawTag = String(url.path.dropFirst(prefix.count))
+        guard !rawTag.isEmpty,
+              !rawTag.contains("/"),
+              let tag = rawTag.removingPercentEncoding,
+              versionParts(tag) != nil else {
+            return nil
+        }
+        return tag
+    }
+
+    static func releaseAssetURL(tag: String, assetName: String) -> URL? {
+        guard versionParts(tag) != nil,
+              let encodedTag = tag.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let encodedAssetName = assetName.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else {
+            return nil
+        }
+        return URL(string: "https://github.com/\(repositoryOwner)/\(repositoryName)/releases/download/\(encodedTag)/\(encodedAssetName)")
+    }
+
+    static func sha256FromSidecar(_ data: Data?) -> String? {
+        guard let data,
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        for token in text.split(whereSeparator: { $0.isWhitespace }) {
+            if let digest = normalizedSHA256(String(token)) {
+                return digest
+            }
+        }
+        return nil
+    }
+
+    static func networkFailure(error: Error?, response: URLResponse?) -> AppUpdateFailure {
+        if let httpResponse = response as? HTTPURLResponse {
+            let status = httpResponse.statusCode
+            let remaining = httpResponse.value(forHTTPHeaderField: "X-RateLimit-Remaining")
+            if status == 429 || (status == 403 && remaining == "0") {
+                return .network(.rateLimited)
+            }
+            return .network(.httpStatus(status))
+        }
+        guard let error else { return .network(.unknown) }
+        let code = (error as? URLError)?.code
+        switch code {
+        case .notConnectedToInternet:
+            return .network(.offline)
+        case .cannotFindHost, .dnsLookupFailed:
+            return .network(.dns)
+        case .cannotConnectToHost, .networkConnectionLost:
+            return .network(.connection)
+        case .timedOut:
+            return .network(.timeout)
+        case .secureConnectionFailed:
+            return .network(.secureConnection)
+        default:
+            return .network(.unknown)
+        }
+    }
+
+    static func isCancellation(_ error: Error) -> Bool {
+        (error as NSError).code == NSURLErrorCancelled
     }
 
     static func sha256(of fileURL: URL) throws -> String {

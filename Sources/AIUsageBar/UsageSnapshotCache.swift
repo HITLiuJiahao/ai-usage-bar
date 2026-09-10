@@ -9,12 +9,14 @@ enum UsageSnapshotCache {
         let snapshots: [ProviderSnapshot]
     }
 
-    private static let version = 1
+    // Version 2 stops reusing the old cache format, which could contain a
+    // provider's daily bucket after it had become stale. The raw snapshot is
+    // retained only as a fallback; its relative daily bucket is rebased
+    // before being presented again.
+    private static let version = 2
 
     static func load() -> [ProviderSnapshot]? {
-        guard let data = try? Data(contentsOf: AppPaths.usageSnapshotCache),
-              let payload = try? JSONDecoder().decode(Payload.self, from: data),
-              payload.version == version else {
+        guard let payload = loadPayload() else {
             return nil
         }
 
@@ -29,12 +31,24 @@ enum UsageSnapshotCache {
         return snapshots.isEmpty ? nil : snapshots
     }
 
+    /// Convert a previously usable result into an explicitly cached result
+    /// when a live provider scan is temporarily unavailable. Keeping the
+    /// cached state here makes the operation idempotent across refresh passes:
+    /// a rebased snapshot is not rebased a second time on every timer tick.
+    static func cachedFallback(_ snapshot: ProviderSnapshot) -> ProviderSnapshot {
+        rebasedForCurrentDay(snapshot).cachedVersion
+    }
+
     /// A cached daily aggregate is otherwise relabeled as today's usage after
-    /// midnight when the provider cannot be scanned. Doubao Work is kept
-    /// visible while its client is closed, so move a one-day-old cached
-    /// aggregate to yesterday and never leave it under today's label.
+    /// midnight when the provider cannot be scanned. Locally logged providers
+    /// remain visible while their clients are closed, so move a one-day-old
+    /// cached aggregate to yesterday and never leave it under today's label.
     static func rebasedForCurrentDay(_ snapshot: ProviderSnapshot) -> ProviderSnapshot {
-        guard snapshot.provider == .doubaoWork else { return snapshot }
+        guard snapshot.provider == .doubaoWork
+            || snapshot.provider == .qwenWork
+            || snapshot.provider == .zcode else {
+            return snapshot
+        }
 
         let calendar = Calendar.autoupdatingCurrent
         let now = Date()
@@ -88,22 +102,49 @@ enum UsageSnapshotCache {
     }
 
     static func save(_ snapshots: [ProviderSnapshot]) {
-        let usable = snapshots.filter { snapshot in
-            snapshot.accounts.contains { !$0.metrics.isEmpty }
+        // Never replace a successful raw snapshot with the already-rebased
+        // cached presentation. Otherwise every refresh while the provider is
+        // unavailable could persist a stale daily value indefinitely.
+        let liveSnapshots = snapshots.filter { $0.state != .cached }
+        guard !liveSnapshots.isEmpty else { return }
+
+        var snapshotsByProvider = Dictionary(
+            uniqueKeysWithValues: (loadPayload()?.snapshots ?? []).map {
+                ($0.provider, $0)
+            }
+        )
+        for snapshot in liveSnapshots {
+            if snapshot.accounts.contains(where: { !$0.metrics.isEmpty }) {
+                snapshotsByProvider[snapshot.provider] = snapshot
+            } else {
+                // A live empty result is authoritative: remove an older
+                // snapshot instead of resurrecting its historical daily data.
+                snapshotsByProvider.removeValue(forKey: snapshot.provider)
+            }
         }
-        guard !usable.isEmpty else { return }
+
+        let merged = ProviderID.trackedCases.compactMap { snapshotsByProvider[$0] }
 
         do {
             try FileManager.default.createDirectory(
                 at: AppPaths.appSupport,
                 withIntermediateDirectories: true
             )
-            let payload = Payload(version: version, snapshots: usable)
+            let payload = Payload(version: version, snapshots: merged)
             let data = try JSONEncoder().encode(payload)
             try data.write(to: AppPaths.usageSnapshotCache, options: .atomic)
         } catch {
             // A cache failure must never make a provider scan fail.
         }
+    }
+
+    private static func loadPayload() -> Payload? {
+        guard let data = try? Data(contentsOf: AppPaths.usageSnapshotCache),
+              let payload = try? JSONDecoder().decode(Payload.self, from: data),
+              payload.version == version else {
+            return nil
+        }
+        return payload
     }
 }
 

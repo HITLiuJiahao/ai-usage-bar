@@ -16,6 +16,7 @@ Download the latest Apple Silicon (`arm64`) ZIP from [GitHub Releases](https://g
 ## Features
 
 - Runs in the macOS menu bar. Click the icon to open the dashboard; right-click for refresh, settings, and quit actions.
+- The full overview can be dragged to a preferred position; its fixed-size canvas keeps the layout stable while data refreshes and scrolling remain available for additional modules.
 - Shows a compact, on-demand usage Dock attached flush to the right edge of the screen, with a broad curved shoulder that blends into the desktop. Click the menu bar indicator or move the pointer to the rightmost edge to wake it; hover a provider to expand its details to the left, and move away to let it collapse. The original full dashboard remains available from the Dock.
 - Supports seven time ranges: today, yesterday, this week, last week, this month, last month, and this year.
 - Distinguishes the standalone QwenWork client from ZCode and Doubao Work local usage records, and includes KIMI Desktop (Kimi Work and Kimi Code), OpenCode, Qianwen Office Mode, and DeepSeek Harness local usage.
@@ -28,6 +29,11 @@ Download the latest Apple Silicon (`arm64`) ZIP from [GitHub Releases](https://g
 - Supports launching automatically at login.
 - Lets you edit the relative order of AI tools in the edge Dock from settings; the order is saved locally and is also used by the full dashboard.
 - Supports Simplified Chinese (default), English, Japanese, and Korean; the selected interface language applies immediately and is saved locally.
+- Includes an optional original desktop pet: a draggable, transparent, cross-Space companion whose mood reacts to local AI activity. It automatically follows locally recorded Codex task lifecycle events—running, completed, and blocked—without uploading a rollout log. Right-click it for level/XP, energy, streaks, a seven-day activity chart, live quotas, active-agent timers, and achievements.
+- After the pet is hidden, the app explains how to show it again from the menu bar or Settings; the reminder can be disabled permanently from the prompt.
+- Tracks local pet growth without a cloud account: token deltas and completed sessions feed the pet; it has five evolution stages, 14 achievements, configurable speech bubbles, notification/sound preferences, break reminders, and a rolling 90-day activity/session archive.
+- Provides a local-only hook bridge for agents that expose lifecycle hooks. `AIUsageBar pet-event --provider … --state …` sends a small JSON event through an owner-only Unix socket; it can include a project path, model name, status message, Token delta, and request count, but never prompts, responses, or credentials.
+- Lets you import original or user-created pet packs (`pet.json` plus a transparent PNG sprite sheet), bind a pack to a project folder, and choose a dedicated project pet when hook events provide that project path.
 - Providers without usable data do not create empty cards; they are listed in small text at the bottom instead.
 - Estimates costs using model-specific input, output, and cache-token prices, including time-window pricing where applicable. CNY prices are displayed in yuan.
 
@@ -66,6 +72,8 @@ Cost estimates are intended for comparison and monitoring; they are not invoices
 ~/.tokei/pricing_overrides.json
 ```
 
+The app also ships a `Resources/pricing.json` snapshot for installations that do not have Tokei's local table. The bundled snapshot is loaded before the user's home table; verified OpenAI prices remain authoritative over the shared catalog, while `pricing_overrides.json` can still explicitly override them.
+
 If the pricing files are unavailable, the app uses conservative built-in prices and model aliases. The override file takes precedence over built-in values, allowing users to update prices according to official pricing.
 
 The basic calculation is:
@@ -79,8 +87,11 @@ Estimated cost ≈ uncached input tokens × input price
 
 Uncached input tokens are calculated by subtracting cache-read and cache-write tokens from the total input where appropriate, avoiding double counting. For models with documented long-context pricing, the adapter applies the model-specific long-context multiplier.
 
+Codex cost events are cached together with a deterministic price version. When the bundled catalog, a Tokei pricing file, an explicit override, or the pricing algorithm changes, the app revalues cached events on the next refresh even if the rollout logs are unchanged. This keeps each stored cost tied to the exact price version used to calculate it.
+
 Special cases:
 
+- GPT-6 Astra uses OpenAI's official API Standard rates: $10 input, $1 cache-read, $12.50 cache-write, and $50 output per million tokens. Requests over 272K input tokens use the documented long-context multipliers. Codex subscription usage is still governed by its plan allowance, so this remains an API-equivalent estimate rather than an invoice.
 - Codex Auto Review is mapped to `GPT-5.3-Codex` pricing.
 - DeepSeek Harness costs use the provider's official CNY peak/off-peak price table when the model and timestamp can be matched.
 - WorkBuddy matches the actual model names in its logs to Kimi/Hy model pricing and prefers the local Tokei pricing files.
@@ -101,6 +112,7 @@ Special cases:
 - KIMI Desktop credentials are read transiently from its existing local sign-in state only for official membership requests; they are not copied into AI Usage Bar's cache.
 - The app makes HTTPS requests to an official provider API only when it needs to read balance or quota information.
 - The encrypted QwenWork `auth-v2.dat` file is not bypassed or decrypted. Credentials that are not explicitly provided are never guessed.
+- Desktop-pet progress, activity summaries, pack metadata, and the 90-day session archive are stored locally under `~/Library/Application Support/AIUsageBar/DesktopPet/`. The optional hook socket is local-only and is created with owner read/write permissions; no desktop-pet cloud account, leaderboard, or telemetry is used.
 
 ## Requirements
 
@@ -126,6 +138,11 @@ open dist/AIUsageBar.app
 ```
 
 The script first attempts a SwiftPM Release build. If the local SwiftPM toolchain and system SDK have incompatible minor versions, it falls back to compiling directly with `swiftc`, then creates and signs `dist/AIUsageBar.app`. It also creates `dist/AIUsageBar-arm64.zip` and its SHA-256 sidecar for GitHub Releases; GitHub exposes the uploaded asset digest to the in-app updater.
+On a Mac whose SwiftPM/SDK combination is already known to be mismatched, skip the failed SwiftPM attempt explicitly:
+
+```sh
+AIUSAGEBAR_FORCE_DIRECT_BUILD=1 bash scripts/build-app.sh
+```
 
 For a static type check only:
 
@@ -164,6 +181,44 @@ Click the gear icon in the upper-right corner of the dashboard, or right-click t
 5. Removing an account only deletes the account configuration saved by AI Usage Bar. It does not delete local data belonging to the corresponding client.
 6. Adjust the **Sidebar AI Tool Order** section by dragging tools or using the up/down controls. The order is retained across launches, and **Restore Default** returns to the built-in order.
 7. Choose a language in the **Language** section. The default is Simplified Chinese; the selection applies immediately and is retained across launches.
+8. Use the **Desktop Pet** section to show/hide the companion, adjust its size and opacity, enable break reminders or notifications, import a pet pack, set optional custom messages, bind project folders, and inspect achievements/session history. Clicking a pet feeds it; right-clicking opens its HUD.
+
+### Desktop Pet Hook Bridge
+
+The pet uses local usage changes for growth, while Codex lifecycle records drive its automatic live state: a running task works, a completed task celebrates, and an aborted task is shown as blocked. While a Codex task is running, the pet can also show a privacy-safe activity summary such as thinking, running a command, editing files, reading files, searching the web, or calling a tool. Agents that support lifecycle hooks can provide the same richer live states (`working`, `waiting`, `blocked`, and `done`), plus a model badge, a project, and accurate session completion. The feature uses lifecycle and tool metadata only; it does not retain or upload prompts, responses, credentials, command arguments, file contents, or tool payloads.
+
+The default global shortcuts are `⌥⌘P` to show the pet and `⌥⇧⌘P` to hide it. They can be changed from **Desktop Pet → Pet Shortcuts**. Hiding the pet opens a reminder with the current show shortcut; **Show Now** re-enables it immediately, while **Don't Remind Me Again** suppresses future reminders.
+
+The packaged executable accepts:
+
+```sh
+"/Applications/AIUsageBar.app/Contents/MacOS/AIUsageBar" pet-event \
+  --provider codex \
+  --state working \
+  --project "$PWD" \
+  --model "GPT-5.6" \
+  --message "Running tests"
+```
+
+Valid states include `working`, `waiting`, `blocked`, `done`, and `idle`. Append `--session`, `--tokens`, or `--requests` when the upstream hook makes those fields available. The exact example command for the current installation is also available in **Desktop Pet → Agent Hook Bridge**, where it can be copied. Hook configuration files are not rewritten automatically; install a hook only through the relevant agent's documented hook mechanism so unrelated user configuration remains untouched.
+
+A user-created pack directory has this minimum layout:
+
+```text
+MyPet/
+├── pet.json
+└── sprite.png
+```
+
+```json
+{
+  "name": "My Pet",
+  "sprite": "sprite.png",
+  "columns": 4
+}
+```
+
+The four left-to-right frames represent idle, working, waiting, and celebrating. Imported sprites are copied into the app's local Application Support directory; the original folder is left unchanged.
 
 ## Project Structure
 
@@ -172,6 +227,7 @@ Click the gear icon in the upper-right corner of the dashboard, or right-click t
 ├── Package.swift                     # SwiftPM package definition
 ├── Resources/Info.plist              # Menu bar app metadata and LSUIElement setting
 ├── Resources/ProviderIcons/          # Bundled official provider brand icons
+├── Resources/Pets/                   # Bundled original desktop-pet sprite packs
 ├── scripts/build-app.sh              # Release build, packaging, and signing
 ├── Sources/AIUsageBar/
 │   ├── AppModel.swift                # Refresh scheduling, concurrent reads, and snapshot state
@@ -193,6 +249,11 @@ Click the gear icon in the upper-right corner of the dashboard, or right-click t
 │   ├── DashboardViews.swift           # Dashboard UI
 │   ├── EdgeDockViews.swift             # Right-edge usage Dock and hover details
 │   ├── AppUpdater.swift                # GitHub release checks, verification, and self-update
+│   ├── DesktopPetStore.swift            # Local pet growth, 90-day archive, packs, and project mappings
+│   ├── DesktopPetBridge.swift           # Local Unix-socket hook relay and CLI event client
+│   ├── DesktopPetViews.swift            # Floating pet, activity bubble, and right-click HUD
+│   ├── DesktopPetWindowController.swift # Draggable cross-Space desktop panel
+│   ├── DesktopPetSettingsView.swift     # Desktop-pet controls, packs, hooks, and history
 │   ├── ProviderOrder.swift             # Persisted provider ordering and snapshot sorting
 │   ├── SidebarOrderEditor.swift        # Settings UI for editing the provider order
 │   ├── Views.swift                    # Menu bar and settings UI
@@ -211,7 +272,8 @@ If the first full read fails, the app retries automatically. When an individual 
 
 Codex subscription quotas are refreshed automatically every 30 seconds. A successful quota response is cached for at most 15 seconds, and a manual refresh bypasses that cache and the local HTTP response cache. The upstream service can still take some time to reflect a just-completed request.
 
-Application updates are checked against the public GitHub Releases API every six hours (and can be checked manually in Settings). An update is considered installable only when the release contains a compatible ZIP asset with GitHub's SHA-256 digest. The package is unpacked into a private temporary directory, checked for the expected bundle identifier, executable, version, and code signature, then installed by a short-lived helper script that keeps a backup until the new app has been validated and reopened.
+Application updates are checked against the public GitHub Releases API every six hours (and can be checked manually in Settings). If that API is rate-limited or temporarily unavailable, the updater falls back to GitHub's public `releases/latest` redirect plus the published ZIP SHA-256 sidecar. An update is considered installable only when it has a compatible ZIP asset and a verified SHA-256 value. The package is unpacked into a private temporary directory, checked for the expected bundle identifier, executable, version, and code signature, then installed by a short-lived helper script that keeps a backup until the new app has been validated and reopened.
+Application updates are checked against the public GitHub Releases API every six hours (and can be checked manually in Settings). If that API is rate-limited or temporarily unavailable, the updater falls back to GitHub's public `releases/latest` redirect plus the published ZIP SHA-256 sidecar. An update is considered installable only when it has a compatible ZIP asset and a verified SHA-256 value. The package is unpacked into a private temporary directory, checked for the expected bundle identifier, executable, version, and code signature, then installed by a short-lived helper script that keeps a backup until the new app has been validated and reopened.
 
 ## Known Limitations
 

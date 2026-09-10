@@ -150,8 +150,9 @@ struct ResetCreditIcon: View {
 enum EdgeDockLayout {
     static let railWidth: CGFloat = 82
     static let detailWidth: CGFloat = 286
-    // Leave enough vertical room for the direct period selector and detail footer.
-    static let panelHeight: CGFloat = 680
+    // Leave enough vertical room for the period selector, detail footer, and
+    // the fifth model row without making the edge dock feel oversized.
+    static let panelHeight: CGFloat = 736
     static let panelSpacing: CGFloat = 9
     static let panelPadding: CGFloat = 10
     // Keep the first and last provider items inside the two large edge arcs.
@@ -518,7 +519,7 @@ private struct EdgeDockDetailView: View {
                 seenModelKeys.insert(Self.modelKey(for: usage.name)).inserted
             }
 
-        return Array(sorted.prefix(4))
+        return Array(sorted.prefix(5))
     }
 
     private static func modelKey(for name: String) -> String {

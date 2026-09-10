@@ -5,7 +5,7 @@ PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 BUILD_BINARY=""
-if swift build -c release --product AIUsageBar; then
+if [[ "${AIUSAGEBAR_FORCE_DIRECT_BUILD:-0}" != "1" ]] && swift build -c release --product AIUsageBar; then
     BUILD_BINARY="$(swift build -c release --show-bin-path)/AIUsageBar"
 else
     echo "SwiftPM 构建未完成，尝试使用本机 Swift 直接编译菜单栏应用。" >&2
@@ -34,8 +34,14 @@ STAGED_APP="$STAGING_ROOT/AIUsageBar.app"
 mkdir -p "$STAGED_APP/Contents/MacOS" "$STAGED_APP/Contents/Resources"
 cp "$BUILD_BINARY" "$STAGED_APP/Contents/MacOS/AIUsageBar"
 cp "$PROJECT_ROOT/Resources/Info.plist" "$STAGED_APP/Contents/Info.plist"
+if [[ -f "$PROJECT_ROOT/Resources/pricing.json" ]]; then
+    cp "$PROJECT_ROOT/Resources/pricing.json" "$STAGED_APP/Contents/Resources/pricing.json"
+fi
 if [[ -d "$PROJECT_ROOT/Resources/ProviderIcons" ]]; then
     cp -R "$PROJECT_ROOT/Resources/ProviderIcons" "$STAGED_APP/Contents/Resources/ProviderIcons"
+fi
+if [[ -d "$PROJECT_ROOT/Resources/Pets" ]]; then
+    cp -R "$PROJECT_ROOT/Resources/Pets" "$STAGED_APP/Contents/Resources/Pets"
 fi
 
 # Sign in a temporary directory first.  The project lives in a synced folder

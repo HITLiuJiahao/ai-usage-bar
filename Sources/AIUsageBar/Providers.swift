@@ -472,10 +472,15 @@ struct CodexProvider: UsageProvider {
     }
 
     func fetch(forceRefresh: Bool) async -> ProviderSnapshot {
-        let scan = await Task.detached(priority: .utility) {
+        // Local rollout aggregation and the live quota request are independent.
+        // Run them together so a slow network response does not add its latency
+        // on top of the (potentially large) local log scan.
+        async let scanResult: CodexUsageScanResult = Task.detached(priority: .utility) {
             CodexUsageScanner.scan()
         }.value
-        let liveQuota = await CodexQuotaService.fetchLive(forceRefresh: forceRefresh)
+        async let quotaResult: CodexQuotaFetchResult? = CodexQuotaService.fetchLive(forceRefresh: forceRefresh)
+        let scan = await scanResult
+        let liveQuota = await quotaResult
 
         var metrics = UsageMetrics.localMetrics(summary: scan.summary, includeMoney: true)
         if let liveQuota {
@@ -802,8 +807,10 @@ struct DoubaoWorkProvider: UsageProvider {
                 message = "次数来自豆包工作聊天 IndexedDB 中的模型用量记录；一个工作任务包含多次模型调用时逐次计数，并按聊天目录日期归档。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
             case .taskLedger:
                 message = "次数来自豆包工作本机聊天账本中的唯一工作任务消息；已排除会周期性重连的本地工具 SSE 通道。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
-            case .modelEvents:
-                message = "次数来自豆包工作本机记录的模型完成事件；已排除会周期性重连的本地工具 SSE 通道，并对 Tea/SDK 镜像日志去重。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
+            case .networkRequests:
+                message = "次数来自豆包工作本机 Tea/SDK 的完成请求日志；已排除会周期性重连的本地工具 SSE 通道，并对镜像日志去重。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
+            case .combined:
+                message = "次数来自豆包工作聊天模型用量记录与 Tea/SDK 完成请求日志；两类记录按自然日取较大值，避免镜像或缓存重复计数，同时补齐聊天记录未写入的当天请求。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
             case .none:
                 message = "已读取豆包工作本机日志，但当前没有可计数的工作任务。"
             }

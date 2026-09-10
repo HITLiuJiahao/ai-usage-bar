@@ -10,7 +10,8 @@ struct DoubaoWorkScanResult {
 enum DoubaoWorkCountSource {
     case chatUsage
     case taskLedger
-    case modelEvents
+    case networkRequests
+    case combined
     case none
 }
 
@@ -52,6 +53,11 @@ private struct DoubaoWorkChatScan {
     let legacyEvents: [DoubaoWorkModelEvent]
 }
 
+private struct DoubaoWorkUsageDay {
+    let date: Date
+    let count: Int
+}
+
 private struct DoubaoWorkScanCache: Codable {
     let version: Int
     let files: [String: DoubaoWorkFileEntry]
@@ -75,13 +81,13 @@ private struct DoubaoWorkScanCache: Codable {
 }
 
 enum DoubaoWorkUsageScanner {
-    // Version 6 counts the local chat record's ext_window_usage entries. A
-    // single Work-mode task can make several model calls, so task/message IDs
-    // are only a fallback and must not be used as the primary request count.
-    // The long-lived local-tool SSE channel is not a usage counter: it
-    // reconnects periodically while the app is idle. The cache also stores
-    // requests from retired log files and uses request start times for daily
-    // buckets.
+    // Version 6 counts the local chat record's ext_window_usage entries when
+    // available, while also retaining the Tea/SDK completion ledger. A single
+    // Work-mode task can make several model calls, so task/message IDs are
+    // only a fallback and must not be used as the primary request count. The
+    // long-lived local-tool SSE channel is not a usage counter: it reconnects
+    // periodically while the app is idle. The cache also stores requests from
+    // retired log files and uses request start times for daily buckets.
     private static let cacheVersion = 6
     private static let cacheOverlapBytes: Int64 = 2 * 1024 * 1024
     private static let completionPaths: Set<String> = [
@@ -189,16 +195,29 @@ enum DoubaoWorkUsageScanner {
             ))
         }
 
-        if !modelEvents.isEmpty {
+        let successfulRequests = allRequests.filter { isSuccessful($0.statusCode) }
+        if !modelEvents.isEmpty || !successfulRequests.isEmpty {
+            let usageDays = mergedUsageDays(
+                modelEvents: modelEvents,
+                requests: successfulRequests
+            )
             var summary = LocalUsageSummary()
-            for event in modelEvents {
-                summary.add(date: event.date, tokens: nil, requests: 1)
+            for usageDay in usageDays {
+                summary.add(
+                    date: usageDay.date,
+                    tokens: nil,
+                    requests: Double(usageDay.count)
+                )
             }
             return DoubaoWorkScanResult(
                 summary: summary,
-                responseCount: modelEvents.count,
+                responseCount: usageDays.reduce(0) { $0 + $1.count },
                 hasLogFiles: !files.isEmpty || !chatFiles.isEmpty,
-                countSource: .chatUsage
+                countSource: modelEvents.isEmpty
+                    ? .networkRequests
+                    : successfulRequests.isEmpty
+                        ? .chatUsage
+                        : .combined
             )
         }
 
@@ -215,24 +234,56 @@ enum DoubaoWorkUsageScanner {
             )
         }
 
-        var summary = LocalUsageSummary()
-        var seen: Set<String> = []
-        var responseCount = 0
-        for request in (activeRequests + archivedRequests)
-            .sorted(by: { $0.date < $1.date }) {
-            guard isSuccessful(request.statusCode) else { continue }
-            let key = deduplicationKey(for: request)
-            guard seen.insert(key).inserted else { continue }
-            summary.add(date: request.date, tokens: nil, requests: 1)
-            responseCount += 1
+        return DoubaoWorkScanResult(
+            summary: LocalUsageSummary(),
+            responseCount: 0,
+            hasLogFiles: !files.isEmpty || !chatFiles.isEmpty,
+            countSource: .none
+        )
+    }
+
+    private static func mergedUsageDays(
+        modelEvents: [DoubaoWorkModelEvent],
+        requests: [DoubaoWorkRequest],
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> [DoubaoWorkUsageDay] {
+        struct DayCounts {
+            var modelEvents = 0
+            var requests = 0
+            var latestDate: Date?
         }
 
-        return DoubaoWorkScanResult(
-            summary: summary,
-            responseCount: responseCount,
-            hasLogFiles: !files.isEmpty || !chatFiles.isEmpty,
-            countSource: responseCount > 0 ? .modelEvents : .none
-        )
+        var counts: [Date: DayCounts] = [:]
+        let upperBound = Date().addingTimeInterval(60)
+
+        for event in modelEvents where event.date <= upperBound {
+            let day = calendar.startOfDay(for: event.date)
+            var value = counts[day] ?? DayCounts()
+            value.modelEvents += 1
+            if value.latestDate == nil || event.date > value.latestDate! {
+                value.latestDate = event.date
+            }
+            counts[day] = value
+        }
+
+        for request in requests where request.date <= upperBound {
+            let day = calendar.startOfDay(for: request.date)
+            var value = counts[day] ?? DayCounts()
+            value.requests += 1
+            if value.latestDate == nil || request.date > value.latestDate! {
+                value.latestDate = request.date
+            }
+            counts[day] = value
+        }
+
+        return counts.map { day, value in
+            DoubaoWorkUsageDay(
+                date: value.latestDate ?? day,
+                count: max(value.modelEvents, value.requests)
+            )
+        }
+        .filter { $0.count > 0 }
+        .sorted { $0.date < $1.date }
     }
 
     private static func logFiles() -> [DoubaoWorkFile] {

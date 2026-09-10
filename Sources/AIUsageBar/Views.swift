@@ -2,6 +2,15 @@ import AppKit
 import SwiftUI
 
 @main
+enum AIUsageBarEntryPoint {
+    static func main() {
+        if PetEventCommand.runIfNeeded() {
+            return
+        }
+        AIUsageBarApp.main()
+    }
+}
+
 struct AIUsageBarApp: App {
     @StateObject private var store: UsageStore
     @StateObject private var statusBar: StatusBarController
@@ -399,6 +408,19 @@ struct AccountSettingsView: View {
             }
 
             Section {
+                DesktopPetSettingsSection()
+            } header: {
+                Text(PetUI.text("桌面宠物", "Desktop Pet"))
+            } footer: {
+                Text(
+                    PetUI.text(
+                        "本机用量用于宠物成长；Codex 任务状态和可选的 Agent Hook 驱动实时动作。数据默认只保存在这台 Mac。",
+                        "Local usage grows your pet; Codex task state and optional agent hooks drive live reactions. Its data stays on this Mac by default."
+                    )
+                )
+            }
+
+            Section {
                 let trackedAccounts = store.accounts.filter { ProviderID.trackedCases.contains($0.provider) }
                 if trackedAccounts.isEmpty {
                     Text(L10n.text(.noManualAccounts, language: languageSettings.language))
@@ -488,7 +510,7 @@ struct AccountSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 540, height: 760)
+        .frame(width: 600, height: 920)
         .padding(.top, 8)
     }
 }

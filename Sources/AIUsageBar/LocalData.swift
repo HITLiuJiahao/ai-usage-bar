@@ -28,7 +28,7 @@ struct TokenBreakdown: Codable {
     }
 }
 
-struct UsageBucket {
+struct UsageBucket: Codable {
     var tokens = TokenBreakdown()
     var requests: Double = 0
     var credits: Double = 0
@@ -63,7 +63,7 @@ struct UsageBucket {
     }
 }
 
-struct LocalUsageSummary {
+struct LocalUsageSummary: Codable {
     var today = UsageBucket()
     var yesterday = UsageBucket()
     var thisWeek = UsageBucket()
@@ -529,9 +529,33 @@ enum SQLiteReader {
         sql: String
     ) -> [[String: Any]] {
         guard FileManager.default.fileExists(atPath: databaseURL.path) else { return [] }
+
+        // Some SQLite databases are readable as a file but reject SQLite's
+        // normal read-only open because the VFS still tries to inspect or
+        // create companion lock files. This is common for app-owned or
+        // synced databases. Try the normal mode first so WAL state is
+        // respected, then fall back to SQLite's immutable read-only URI,
+        // which never writes beside the database.
+        let databaseNames = [
+            databaseURL.path,
+            immutableReadOnlyURI(for: databaseURL)
+        ]
+
+        for databaseName in databaseNames {
+            if let rows = runQuery(databaseName: databaseName, sql: sql) {
+                return rows
+            }
+        }
+        return []
+    }
+
+    private static func runQuery(
+        databaseName: String,
+        sql: String
+    ) -> [[String: Any]]? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
-        process.arguments = ["-readonly", "-json", databaseURL.path, sql]
+        process.arguments = ["-readonly", "-json", databaseName, sql]
         let output = Pipe()
         let error = Pipe()
         process.standardOutput = output
@@ -540,14 +564,20 @@ enum SQLiteReader {
             try process.run()
             let data = output.fileHandleForReading.readDataToEndOfFile()
             process.waitUntilExit()
-            guard process.terminationStatus == 0 else { return [] }
+            guard process.terminationStatus == 0 else { return nil }
             guard let parsed = LocalData.parseJSON(data: data) as? [[String: Any]] else {
-                return []
+                return nil
             }
             return parsed
         } catch {
-            return []
+            return nil
         }
+    }
+
+    private static func immutableReadOnlyURI(for databaseURL: URL) -> String {
+        let absoluteString = databaseURL.absoluteString
+        let separator = absoluteString.contains("?") ? "&" : "?"
+        return "\(absoluteString)\(separator)mode=ro&immutable=1"
     }
 }
 

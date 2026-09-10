@@ -991,13 +991,8 @@ enum L10n {
             case .japanese: return "公開リリースはまだありません"
             case .korean: return "아직 공개 릴리스가 없습니다"
             }
-        case .network:
-            switch language {
-            case .simplifiedChinese: return "暂时无法连接 GitHub"
-            case .english: return "GitHub is temporarily unavailable"
-            case .japanese: return "GitHubに一時的に接続できません"
-            case .korean: return "GitHub에 일시적으로 연결할 수 없습니다"
-            }
+        case .network(let issue):
+            return updateNetworkFailureText(issue, language: language)
         case .invalidMetadata:
             switch language {
             case .simplifiedChinese: return "更新信息不完整或更新包不受支持"
@@ -1047,6 +1042,78 @@ enum L10n {
             case .japanese: return "アップデートの準備に失敗しました。現在のアプリは変更されていません"
             case .korean: return "업데이트 준비에 실패했습니다. 현재 앱은 변경되지 않았습니다"
             }
+        }
+    }
+
+    private static func updateNetworkFailureText(
+        _ issue: AppUpdateNetworkIssue,
+        language: AppLanguage
+    ) -> String {
+        let text: (zh: String, en: String, ja: String, ko: String)
+        switch issue {
+        case .offline:
+            text = (
+                "当前没有可用网络连接",
+                "No network connection is available",
+                "ネットワーク接続が利用できません",
+                "사용 가능한 네트워크 연결이 없습니다"
+            )
+        case .dns:
+            text = (
+                "无法解析 GitHub 域名，请检查 DNS、网络或代理",
+                "GitHub's domain could not be resolved. Check DNS, network, or proxy settings",
+                "GitHubのドメインを解決できません。DNS、ネットワーク、またはプロキシを確認してください",
+                "GitHub 도메인을 확인할 수 없습니다. DNS, 네트워크 또는 프록시를 확인하세요"
+            )
+        case .connection:
+            text = (
+                "无法建立到 GitHub 的连接，请检查网络或 Clash/代理",
+                "Could not connect to GitHub. Check your network or proxy",
+                "GitHubに接続できません。ネットワークまたはプロキシを確認してください",
+                "GitHub에 연결할 수 없습니다. 네트워크 또는 프록시를 확인하세요"
+            )
+        case .timeout:
+            text = (
+                "连接 GitHub 超时，请检查网络或代理",
+                "The GitHub connection timed out. Check your network or proxy",
+                "GitHubへの接続がタイムアウトしました。ネットワークまたはプロキシを確認してください",
+                "GitHub 연결 시간이 초과되었습니다. 네트워크 또는 프록시를 확인하세요"
+            )
+        case .secureConnection:
+            text = (
+                "GitHub 安全连接验证失败，请检查代理或系统时间",
+                "GitHub's secure connection could not be verified. Check your proxy or system time",
+                "GitHubの安全な接続を検証できません。プロキシまたはシステム時刻を確認してください",
+                "GitHub 보안 연결을 확인할 수 없습니다. 프록시 또는 시스템 시간을 확인하세요"
+            )
+        case .rateLimited:
+            text = (
+                "GitHub API 暂时限流，请稍后再试",
+                "GitHub's API is temporarily rate-limited. Try again shortly",
+                "GitHub APIが一時的にレート制限されています。しばらくしてから再試行してください",
+                "GitHub API가 일시적으로 속도 제한되었습니다. 잠시 후 다시 시도하세요"
+            )
+        case .httpStatus(let status):
+            text = (
+                "GitHub 返回 HTTP \(status)",
+                "GitHub returned HTTP \(status)",
+                "GitHubがHTTP \(status) を返しました",
+                "GitHub에서 HTTP \(status) 응답을 반환했습니다"
+            )
+        case .unknown:
+            text = (
+                "暂时无法连接 GitHub",
+                "GitHub is temporarily unavailable",
+                "GitHubに一時的に接続できません",
+                "GitHub에 일시적으로 연결할 수 없습니다"
+            )
+        }
+
+        switch language {
+        case .simplifiedChinese: return text.zh
+        case .english: return text.en
+        case .japanese: return text.ja
+        case .korean: return text.ko
         }
     }
 

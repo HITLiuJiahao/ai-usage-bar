@@ -1,6 +1,15 @@
 import Foundation
 import SwiftUI
 
+struct CodexStatusQuota {
+    let window: UsageWindow
+    let remaining: Int
+    /// A Plus-specific warning state for the menu-bar presentation. It is
+    /// deliberately tied to the exact source value instead of the rounded
+    /// percentage displayed to the user.
+    let isWeeklyQuotaWarning: Bool
+}
+
 @MainActor
 final class UsageStore: ObservableObject {
     @Published private(set) var snapshots: [ProviderSnapshot] = ProviderID.trackedCases.map(ProviderSnapshot.empty)
@@ -94,6 +103,11 @@ final class UsageStore: ObservableObject {
         refreshError = nil
         let providers = ProviderRegistry.all
 
+        // Pricing files can be updated while the app is running. Refresh the
+        // shared pricing catalog before providers start concurrently so every
+        // local adapter uses the same price version for this pass.
+        CodexPricing.refresh()
+
         // Each provider is independent. Fetch them concurrently so a slow
         // network endpoint cannot hold back local log based providers.
         await withTaskGroup(of: ProviderSnapshot.self) { group in
@@ -115,7 +129,7 @@ final class UsageStore: ObservableObject {
                 if snapshot.provider != .doubaoWork,
                    previous.metricCount > 0,
                    (snapshot.metricCount == 0 || snapshot.state == .unavailable) {
-                    snapshots[index] = UsageSnapshotCache.rebasedForCurrentDay(previous)
+                    snapshots[index] = UsageSnapshotCache.cachedFallback(previous)
                     continue
                 }
                 snapshots[index] = snapshot
@@ -145,30 +159,70 @@ final class UsageStore: ObservableObject {
         codexRemainingPercent(for: .weekly)
     }
 
-    /// Prefer the short rolling window when the account exposes it. Some
-    /// Codex plans expose only the seven-day window, so the status item must
-    /// fall back instead of going blank for those accounts.
-    var codexStatusQuota: (window: UsageWindow, remaining: Int)? {
-        for window in [UsageWindow.fiveHours, .weekly] {
-            if let remaining = codexRemainingPercent(for: window) {
-                return (window, remaining)
+    /// Prefer the short rolling window when the account exposes it. For Plus,
+    /// a critical seven-day balance takes priority so the menu bar surfaces
+    /// the quota that needs attention. Plans without a five-hour bucket still
+    /// fall back to their seven-day quota instead of going blank.
+    var codexStatusQuota: CodexStatusQuota? {
+        let accounts = codexAccounts
+
+        for account in accounts where isCodexPlus(account.planName) {
+            if let weeklyQuota = quotaMetric(in: account, window: .weekly),
+               let remaining = weeklyQuota.remaining,
+               remaining.isFinite,
+               remaining < 20 {
+                return CodexStatusQuota(
+                    window: .weekly,
+                    remaining: roundedRemainingPercent(remaining),
+                    isWeeklyQuotaWarning: true
+                )
+            }
+        }
+
+        for account in accounts {
+            for window in [UsageWindow.fiveHours, .weekly] {
+                if let remaining = quotaMetric(in: account, window: window)?.remaining,
+                   remaining.isFinite {
+                    return CodexStatusQuota(
+                        window: window,
+                        remaining: roundedRemainingPercent(remaining),
+                        isWeeklyQuotaWarning: false
+                    )
+                }
             }
         }
         return nil
     }
 
     private func codexRemainingPercent(for window: UsageWindow) -> Int? {
-        let quotaMetric = snapshots
-            .first(where: { $0.provider == .codex })?
-            .accounts
-            .flatMap(\.metrics)
-            .first(where: { metric in
-                metric.kind == .quota && metric.window == window
-            })
-        guard let remaining = quotaMetric?.remaining, remaining.isFinite else {
+        guard let remaining = codexAccounts
+            .compactMap({ quotaMetric(in: $0, window: window)?.remaining })
+            .first(where: { $0.isFinite }) else {
             return nil
         }
-        return Int(min(max(remaining, 0), 100).rounded())
+        return roundedRemainingPercent(remaining)
+    }
+
+    private var codexAccounts: [AccountUsageSnapshot] {
+        snapshots.first(where: { $0.provider == .codex })?.accounts ?? []
+    }
+
+    private func quotaMetric(in account: AccountUsageSnapshot, window: UsageWindow) -> UsageMetric? {
+        account.metrics.first { metric in
+            metric.kind == .quota && metric.window == window
+        }
+    }
+
+    private func roundedRemainingPercent(_ remaining: Double) -> Int {
+        Int(min(max(remaining, 0), 100).rounded())
+    }
+
+    private func isCodexPlus(_ planName: String?) -> Bool {
+        guard let planName else { return false }
+        let words = planName
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+        return words.contains("plus")
     }
 
     var criticalPercent: Int? {

@@ -228,9 +228,22 @@ struct DashboardPopover: View {
                 ScrollViewReader { proxy in
                     ScrollView(
                         .vertical,
-                        showsIndicators: dashboardGridContentHeight > dashboardGridViewportHeight + 0.5
+                        showsIndicators: dashboardGridNeedsScroll
                     ) {
                         dashboardGrid
+                            // Keep the complete grid's intrinsic height inside
+                            // the scroll view. Without an explicit minimum,
+                            // SwiftUI can compress the content to the viewport
+                            // when the outer panel is height-constrained,
+                            // leaving no scroll range for provider seven and
+                            // later.
+                            .frame(
+                                minHeight: max(
+                                    dashboardGridContentHeight,
+                                    dashboardGridViewportHeight
+                                ),
+                                alignment: .top
+                            )
                             .id("dashboard-grid-top")
                     }
                     .frame(height: dashboardGridViewportHeight, alignment: .top)
@@ -263,7 +276,7 @@ struct DashboardPopover: View {
             )
         }
         .preferredColorScheme(.dark)
-        .frame(width: dashboardWidth, height: dashboardHeight)
+        .frame(width: DashboardLayout.width, height: dashboardContentHeight)
         .onAppear {
             reportDashboardSize()
         }
@@ -284,18 +297,6 @@ struct DashboardPopover: View {
         }
     }
 
-    private var dashboardScale: CGFloat {
-        DashboardLayout.scale
-    }
-
-    private var dashboardWidth: CGFloat {
-        DashboardLayout.width
-    }
-
-    private var dashboardHeight: CGFloat {
-        dashboardContentHeight * dashboardScale
-    }
-
     private var dashboardMaximumHeight: CGFloat {
         DashboardLayout.maximumHeight(for: visibleFrame)
     }
@@ -312,6 +313,10 @@ struct DashboardPopover: View {
             forModuleCount: visibleSnapshots.count,
             cardHeights: cardHeights
         )
+    }
+
+    private var dashboardGridNeedsScroll: Bool {
+        dashboardGridContentHeight > dashboardGridViewportHeight + 0.5
     }
 
     private var dashboardContentHeight: CGFloat {
@@ -392,7 +397,7 @@ struct DashboardPopover: View {
     }
 
     private func reportDashboardSize() {
-        let size = CGSize(width: dashboardWidth, height: dashboardHeight)
+        let size = CGSize(width: DashboardLayout.width, height: dashboardContentHeight)
         DispatchQueue.main.async {
             onSizeChange(size)
         }
@@ -1310,9 +1315,6 @@ private struct ModelUsageRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.48))
                 Circle()
                     .fill(accent.opacity(0.85))
                     .frame(width: 7, height: 7)

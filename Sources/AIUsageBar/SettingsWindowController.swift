@@ -12,7 +12,7 @@ final class SettingsWindowController: NSWindowController {
 
     private init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 580, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 940),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
@@ -22,7 +22,7 @@ final class SettingsWindowController: NSWindowController {
         )
         window.title = L10n.text(.settingsWindowTitle)
         window.isReleasedWhenClosed = false
-        window.minSize = NSSize(width: 520, height: 560)
+        window.minSize = NSSize(width: 560, height: 600)
         window.center()
 
         // The dashboard itself is a floating panel. Keep settings at the same
