@@ -130,6 +130,12 @@ enum L10n {
         case credentialsFooter
         case sidebarOrder
         case sidebarOrderHelp
+        case sidebarExpansion
+        case sidebarExpansionHelp
+        case sidebarExpansionRight
+        case sidebarExpansionLeft
+        case sidebarExpansionBoth
+        case sidebarExpansionDisabled
         case dragToReorder
         case restoreDefault
         case moveUp
@@ -255,6 +261,12 @@ enum L10n {
             .credentialsFooter: "Codex 当前登录态会自动读取；QwenWork 的订阅 Credits 来自官方账户接口，本地日志补充请求和模型明细。需要读取官方额度时，可将 Access Token 保存到 macOS 钥匙串。",
             .sidebarOrder: "侧边栏 AI 工具顺序",
             .sidebarOrderHelp: "侧边栏和完整概览会按照这里的顺序显示。拖动工具，或使用右侧箭头调整位置。",
+            .sidebarExpansion: "侧边栏展开位置",
+            .sidebarExpansionHelp: "选择侧边栏从桌面哪一侧展开。选择“不允许侧边栏”后，点击菜单栏图标会直接打开完整概览。",
+            .sidebarExpansionRight: "桌面右侧展开",
+            .sidebarExpansionLeft: "桌面左侧展开",
+            .sidebarExpansionBoth: "两侧均可展开",
+            .sidebarExpansionDisabled: "不允许侧边栏",
             .dragToReorder: "拖动工具调整显示顺序",
             .restoreDefault: "恢复默认",
             .moveUp: "上移",
@@ -378,6 +390,12 @@ enum L10n {
             .credentialsFooter: "Codex sign-in is read automatically; QwenWork subscription Credits come from its official account API, while local logs provide request and model details. Save an Access Token in the macOS Keychain when official quota access is needed.",
             .sidebarOrder: "Sidebar AI Tool Order",
             .sidebarOrderHelp: "The sidebar and full overview use this order. Drag a tool or use the arrows to reposition it.",
+            .sidebarExpansion: "Sidebar Expansion",
+            .sidebarExpansionHelp: "Choose which desktop edge can open the sidebar. When the sidebar is disabled, clicking the menu bar icon opens the full overview directly.",
+            .sidebarExpansionRight: "Expand from the right edge",
+            .sidebarExpansionLeft: "Expand from the left edge",
+            .sidebarExpansionBoth: "Allow both sides",
+            .sidebarExpansionDisabled: "Disable the sidebar",
             .dragToReorder: "Drag to reorder tools",
             .restoreDefault: "Restore Default",
             .moveUp: "Move Up",
@@ -501,6 +519,12 @@ enum L10n {
             .credentialsFooter: "Codexのログイン状態は自動的に読み取られます。QwenWorkのCreditsは公式アカウントAPIから取得し、ローカルログでリクエストとモデル詳細を補います。公式クォータが必要な場合はAccess TokenをmacOSキーチェーンに保存してください。",
             .sidebarOrder: "サイドバー AI ツールの順序",
             .sidebarOrderHelp: "サイドバーと完全な概要はこの順序で表示されます。ドラッグまたは矢印で並べ替えます。",
+            .sidebarExpansion: "サイドバーの展開位置",
+            .sidebarExpansionHelp: "サイドバーを開けるデスクトップの端を選択します。「サイドバーを許可しない」を選ぶと、メニューバーアイコンをクリックして完全な概要を直接開きます。",
+            .sidebarExpansionRight: "デスクトップ右側から展開",
+            .sidebarExpansionLeft: "デスクトップ左側から展開",
+            .sidebarExpansionBoth: "両側から展開",
+            .sidebarExpansionDisabled: "サイドバーを許可しない",
             .dragToReorder: "ドラッグして並べ替え",
             .restoreDefault: "デフォルトに戻す",
             .moveUp: "上へ",
@@ -624,6 +648,12 @@ enum L10n {
             .credentialsFooter: "Codex 로그인 상태는 자동으로 읽습니다. QwenWork 구독 Credits는 공식 계정 API에서 가져오며, 로컬 로그로 요청과 모델 세부 정보를 보완합니다. 공식 한도를 읽으려면 Access Token을 macOS 키체인에 저장하세요.",
             .sidebarOrder: "사이드바 AI 도구 순서",
             .sidebarOrderHelp: "사이드바와 전체 개요가 이 순서로 표시됩니다. 도구를 드래그하거나 화살표로 이동하세요.",
+            .sidebarExpansion: "사이드바 펼치기 위치",
+            .sidebarExpansionHelp: "사이드바를 열 수 있는 데스크톱 가장자리를 선택합니다. 사이드바를 허용하지 않으면 메뉴 막대 아이콘을 클릭할 때 전체 개요가 바로 열립니다.",
+            .sidebarExpansionRight: "데스크톱 오른쪽에서 펼치기",
+            .sidebarExpansionLeft: "데스크톱 왼쪽에서 펼치기",
+            .sidebarExpansionBoth: "양쪽에서 펼치기",
+            .sidebarExpansionDisabled: "사이드바 허용 안 함",
             .dragToReorder: "드래그하여 순서 변경",
             .restoreDefault: "기본값 복원",
             .moveUp: "위로 이동",

@@ -348,6 +348,7 @@ struct AccountSettingsView: View {
     @StateObject private var store = AccountSettingsStore()
     @StateObject private var launchAtLogin = LaunchAtLoginSettings()
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
+    @ObservedObject private var edgeDockSettings = EdgeDockExpansionSettings.shared
 
     var body: some View {
         Form {
@@ -492,6 +493,24 @@ struct AccountSettingsView: View {
                 Text(L10n.text(.sidebarOrder, language: languageSettings.language))
             } footer: {
                 Text(L10n.text(.sidebarOrderHelp, language: languageSettings.language))
+            }
+
+            Section {
+                Picker(selection: $edgeDockSettings.mode) {
+                    ForEach(EdgeDockExpansionMode.allCases) { mode in
+                        Text(
+                            L10n.text(
+                                mode.localizationKey,
+                                language: languageSettings.language
+                            )
+                        )
+                        .tag(mode)
+                    }
+                } label: {
+                    Text(L10n.text(.sidebarExpansion, language: languageSettings.language))
+                }
+            } footer: {
+                Text(L10n.text(.sidebarExpansionHelp, language: languageSettings.language))
             }
 
             Section {
