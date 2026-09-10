@@ -3,9 +3,17 @@ import Combine
 import SwiftUI
 
 @MainActor
-final class StatusBarController: NSObject, ObservableObject {
+final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
     private let store: UsageStore
+    private let desktopPetStore: DesktopPetStore
+    private let petEventSocketServer: PetEventSocketServer
     private let dashboardPanel = NSPanel(
+        contentRect: .zero,
+        styleMask: [.borderless, .nonactivatingPanel],
+        backing: .buffered,
+        defer: true
+    )
+    private let edgeDockPanel = NSPanel(
         contentRect: .zero,
         styleMask: [.borderless, .nonactivatingPanel],
         backing: .buffered,
@@ -16,16 +24,45 @@ final class StatusBarController: NSObject, ObservableObject {
     private var statusItem: NSStatusItem?
     private var localOutsideClickMonitor: Any?
     private var globalOutsideClickMonitor: Any?
+    private var edgeDockLocalMouseMonitor: Any?
+    private var edgeDockGlobalMouseMonitor: Any?
+    private var edgeDockHideTask: Task<Void, Never>?
     private var isDashboardPanelConfigured = false
+    private var isEdgeDockConfigured = false
+    private var isEdgeDockHiding = false
+    private var hasDashboardPosition = false
+    private let dashboardFrameAutosaveName = "AIUsageBar.dashboard"
 
     init(store: UsageStore) {
         self.store = store
+        desktopPetStore = .shared
+        petEventSocketServer = PetEventSocketServer(store: .shared)
         super.init()
+        AppUpdater.shared.startAutomaticChecks()
         configureStatusItem()
         configureContextMenu()
         store.$snapshots
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
+                self?.updateStatusItem()
+            }
+            .store(in: &cancellables)
+        store.$snapshots
+            .receive(on: RunLoop.main)
+            .sink { [weak self] snapshots in
+                self?.desktopPetStore.ingest(snapshots: snapshots)
+            }
+            .store(in: &cancellables)
+        desktopPetStore.$preferences
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.configureContextMenu()
+            }
+            .store(in: &cancellables)
+        AppLanguageSettings.shared.$language
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.configureContextMenu()
                 self?.updateStatusItem()
             }
             .store(in: &cancellables)
@@ -36,6 +73,38 @@ final class StatusBarController: NSObject, ObservableObject {
         // Wait until the app has entered the main run loop before attaching it.
         DispatchQueue.main.async { [weak self] in
             self?.configureDashboardPanel()
+            self?.configureEdgeDockPanel()
+            DesktopPetWindowController.shared.start()
+            self?.petEventSocketServer.start()
+        }
+
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.positionEdgeDockPanel()
+                if self?.dashboardPanel.isVisible == true {
+                    self?.positionDashboardPanel()
+                }
+            }
+            .store(in: &cancellables)
+
+        installEdgeDockMonitors()
+    }
+
+    deinit {
+        petEventSocketServer.stop()
+        edgeDockHideTask?.cancel()
+        if let edgeDockLocalMouseMonitor {
+            NSEvent.removeMonitor(edgeDockLocalMouseMonitor)
+        }
+        if let edgeDockGlobalMouseMonitor {
+            NSEvent.removeMonitor(edgeDockGlobalMouseMonitor)
+        }
+        if let localOutsideClickMonitor {
+            NSEvent.removeMonitor(localOutsideClickMonitor)
+        }
+        if let globalOutsideClickMonitor {
+            NSEvent.removeMonitor(globalOutsideClickMonitor)
         }
     }
 
@@ -52,21 +121,35 @@ final class StatusBarController: NSObject, ObservableObject {
 
     private func updateStatusItem() {
         guard let button = statusItem?.button else { return }
-        if let remaining = store.codexWeeklyRemainingPercent {
-            button.image = CodexQuotaStatusImage.make(remainingPercent: remaining)
-            button.title = "\(remaining)"
+        let statusQuota = store.codexStatusQuota
+        if let statusQuota {
+            let remaining = statusQuota.remaining
+            button.image = CodexQuotaStatusImage.make(
+                remainingPercent: remaining,
+                usesWeeklyWarningStyle: statusQuota.isWeeklyQuotaWarning
+            )
+            button.attributedTitle = NSAttributedString(
+                string: "\(remaining)%",
+                attributes: [
+                    .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
+                    .foregroundColor: NSColor.white
+                ]
+            )
             button.imagePosition = .imageLeft
             button.imageScaling = .scaleProportionallyDown
-            button.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .medium)
-            button.toolTip = "Codex 周额度剩余 \(remaining)% · 点击查看 AI 使用概览"
+            button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+            button.toolTip = L10n.codexStatusTooltip(
+                remaining: remaining,
+                window: statusQuota.window
+            )
         } else {
             button.image = NSImage(
                 systemSymbolName: "gauge.medium",
-                accessibilityDescription: "AI 使用概览"
+                accessibilityDescription: L10n.text(.overviewTitle)
             )
-            button.title = ""
+            button.attributedTitle = NSAttributedString(string: "")
             button.imagePosition = .imageOnly
-            button.toolTip = "AI 使用概览"
+            button.toolTip = L10n.text(.overviewTitle)
         }
     }
 
@@ -76,6 +159,7 @@ final class StatusBarController: NSObject, ObservableObject {
         dashboardPanel.contentViewController = NSHostingController(
             rootView: DashboardPopover(
                 store: store,
+                visibleFrame: dashboardScreenVisibleFrame,
                 onSizeChange: { [weak self] size in
                     self?.updateDashboardSize(size)
                 }
@@ -90,9 +174,54 @@ final class StatusBarController: NSObject, ObservableObject {
         dashboardPanel.isOpaque = false
         dashboardPanel.backgroundColor = .clear
         dashboardPanel.hasShadow = true
-        dashboardPanel.isMovable = false
+        dashboardPanel.isMovable = true
+        dashboardPanel.isMovableByWindowBackground = true
+        dashboardPanel.delegate = self
+        dashboardPanel.setFrameAutosaveName(dashboardFrameAutosaveName)
+        hasDashboardPosition = dashboardPanel.setFrameUsingName(dashboardFrameAutosaveName)
+        // A previous build allowed resizing and may have saved a scaled frame.
+        // Keep its position, but restore the fixed-size canvas immediately.
+        let resetSize = DashboardLayout.fittingSize(
+            forModuleCount: 0,
+            visibleFrame: dashboardScreenVisibleFrame
+        )
+        dashboardPanel.setContentSize(
+            NSSize(width: resetSize.width, height: resetSize.height)
+        )
         dashboardPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         isDashboardPanelConfigured = true
+    }
+
+    private func configureEdgeDockPanel() {
+        guard !isEdgeDockConfigured else { return }
+
+        edgeDockPanel.contentViewController = NSHostingController(
+            rootView: EdgeDockView(
+                store: store,
+                onSizeChange: { [weak self] size in
+                    self?.updateEdgeDockSize(size)
+                },
+                onOpenDashboard: { [weak self] in
+                    self?.showDashboard()
+                }
+            )
+        )
+
+        edgeDockPanel.isFloatingPanel = true
+        edgeDockPanel.level = .floating
+        edgeDockPanel.hidesOnDeactivate = false
+        edgeDockPanel.isOpaque = false
+        edgeDockPanel.backgroundColor = .clear
+        edgeDockPanel.hasShadow = false
+        edgeDockPanel.isMovable = false
+        edgeDockPanel.becomesKeyOnlyIfNeeded = true
+        edgeDockPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        edgeDockPanel.setContentSize(
+            NSSize(width: EdgeDockLayout.collapsedWidth, height: EdgeDockLayout.panelHeight)
+        )
+        isEdgeDockConfigured = true
+
+        positionEdgeDockPanel()
     }
 
     private var dashboardScreenVisibleFrame: CGRect? {
@@ -102,7 +231,9 @@ final class StatusBarController: NSObject, ObservableObject {
     }
 
     private func updateDashboardSize(_ size: CGSize) {
-        let contentSize = NSSize(width: size.width, height: size.height)
+        let contentSize = constrainedDashboardSize(
+            NSSize(width: size.width, height: size.height)
+        )
         DispatchQueue.main.async { [weak self] in
             guard let self,
                   self.isDashboardPanelConfigured,
@@ -113,17 +244,241 @@ final class StatusBarController: NSObject, ObservableObject {
             let widthChanged = abs(currentSize.width - contentSize.width) > 0.5
             let heightChanged = abs(currentSize.height - contentSize.height) > 0.5
             if widthChanged || heightChanged {
-                self.dashboardPanel.setContentSize(contentSize)
-            }
-
-            if self.dashboardPanel.isVisible {
+                if self.dashboardPanel.isVisible {
+                    self.positionDashboardPanel(
+                        contentSize: contentSize,
+                        animated: false
+                    )
+                } else {
+                    self.dashboardPanel.setContentSize(contentSize)
+                }
+            } else if self.dashboardPanel.isVisible {
                 self.positionDashboardPanel()
             }
         }
     }
 
-    private func positionDashboardPanel() {
-        guard let screen = statusItem?.button?.window?.screen
+    private func updateEdgeDockSize(_ size: CGSize) {
+        let contentSize = NSSize(width: size.width, height: size.height)
+        DispatchQueue.main.async { [weak self] in
+            guard let self,
+                  self.isEdgeDockConfigured,
+                  self.edgeDockPanel.contentViewController != nil
+            else { return }
+
+            let currentSize = self.edgeDockPanel.contentView?.frame.size ?? .zero
+            let widthChanged = abs(currentSize.width - contentSize.width) > 0.5
+            let heightChanged = abs(currentSize.height - contentSize.height) > 0.5
+            if widthChanged || heightChanged {
+                self.positionEdgeDockPanel(
+                    contentSize: contentSize,
+                    animated: self.edgeDockPanel.isVisible
+                )
+            } else if self.edgeDockPanel.isVisible {
+                self.positionEdgeDockPanel()
+            }
+        }
+    }
+
+    private var edgeDockScreen: NSScreen? {
+        statusItem?.button?.window?.screen
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+    }
+
+    private func positionEdgeDockPanel(
+        contentSize: NSSize? = nil,
+        animated: Bool = false
+    ) {
+        guard let screen = edgeDockScreen else { return }
+
+        let frame = edgeDockFrame(contentSize: contentSize, on: screen)
+        guard frame.width > 0, frame.height > 0 else { return }
+
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.24
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                edgeDockPanel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            edgeDockPanel.setFrame(frame, display: true)
+        }
+    }
+
+    private func installEdgeDockMonitors() {
+        removeEdgeDockMonitors()
+
+        let events: NSEvent.EventTypeMask = [
+            .mouseMoved,
+            .leftMouseDown,
+            .rightMouseDown,
+            .otherMouseDown
+        ]
+
+        edgeDockLocalMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: events) {
+            [weak self] event in
+            let location = NSEvent.mouseLocation
+            Task { @MainActor [weak self] in
+                self?.handleEdgeDockPointer(event.type, at: location)
+            }
+            return event
+        }
+
+        edgeDockGlobalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: events) {
+            [weak self] event in
+            let location = NSEvent.mouseLocation
+            Task { @MainActor [weak self] in
+                self?.handleEdgeDockPointer(event.type, at: location)
+            }
+        }
+    }
+
+    private func removeEdgeDockMonitors() {
+        if let edgeDockLocalMouseMonitor {
+            NSEvent.removeMonitor(edgeDockLocalMouseMonitor)
+            self.edgeDockLocalMouseMonitor = nil
+        }
+        if let edgeDockGlobalMouseMonitor {
+            NSEvent.removeMonitor(edgeDockGlobalMouseMonitor)
+            self.edgeDockGlobalMouseMonitor = nil
+        }
+    }
+
+    private func handleEdgeDockPointer(_ eventType: NSEvent.EventType, at location: NSPoint) {
+        if eventType == .mouseMoved {
+            if isInsideEdgeTrigger(at: location) {
+                showEdgeDockPanel(on: screen(containing: location))
+            } else if edgeDockPanel.isVisible {
+                if isInsideEdgeDock(at: location) {
+                    cancelEdgeDockHide()
+                } else {
+                    scheduleEdgeDockHide()
+                }
+            } else if isInsideEdgeTrigger(at: location) {
+                showEdgeDockPanel()
+            }
+            return
+        }
+
+        guard edgeDockPanel.isVisible, !isInsideEdgeDock(at: location) else { return }
+        hideEdgeDockPanel(animated: true)
+    }
+
+    private func isInsideEdgeTrigger(at location: NSPoint) -> Bool {
+        guard let screen = screen(containing: location) else { return false }
+        let frame = screen.visibleFrame
+        return location.x >= frame.maxX - 5
+            && location.y >= frame.minY
+            && location.y <= frame.maxY
+    }
+
+    private func screen(containing location: NSPoint) -> NSScreen? {
+        NSScreen.screens.first(where: { $0.frame.contains(location) }) ?? edgeDockScreen
+    }
+
+    private func isInsideEdgeDock(at location: NSPoint) -> Bool {
+        edgeDockPanel.frame.insetBy(dx: -6, dy: -6).contains(location)
+    }
+
+    private func cancelEdgeDockHide() {
+        edgeDockHideTask?.cancel()
+        edgeDockHideTask = nil
+    }
+
+    private func scheduleEdgeDockHide() {
+        guard edgeDockPanel.isVisible else { return }
+        edgeDockHideTask?.cancel()
+        edgeDockHideTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 650_000_000)
+            guard !Task.isCancelled, let self else { return }
+            let location = NSEvent.mouseLocation
+            guard !self.isInsideEdgeDock(at: location) else { return }
+            self.hideEdgeDockPanel(animated: true)
+        }
+    }
+
+    private func showEdgeDockPanel(on screen: NSScreen? = nil) {
+        cancelEdgeDockHide()
+        if !isEdgeDockConfigured {
+            configureEdgeDockPanel()
+        }
+        guard let screen = screen ?? edgeDockScreen else { return }
+
+        let wasHiding = isEdgeDockHiding
+        guard !edgeDockPanel.isVisible || wasHiding else { return }
+        isEdgeDockHiding = false
+
+        let targetFrame = edgeDockFrame(
+            contentSize: edgeDockPanel.frame.size,
+            on: screen
+        )
+        if !edgeDockPanel.isVisible {
+            var startingFrame = targetFrame
+        startingFrame.origin.x = screen.visibleFrame.maxX + EdgeDockLayout.edgeOverlap + 4
+            edgeDockPanel.setFrame(startingFrame, display: false)
+        }
+        edgeDockPanel.orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.28
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            edgeDockPanel.animator().setFrame(targetFrame, display: true)
+        }
+    }
+
+    private func hideEdgeDockPanel(animated: Bool) {
+        cancelEdgeDockHide()
+        guard edgeDockPanel.isVisible, !isEdgeDockHiding else { return }
+
+        guard animated, let screen = edgeDockScreen else {
+            isEdgeDockHiding = false
+            edgeDockPanel.orderOut(nil)
+            edgeDockPanel.contentViewController = nil
+            isEdgeDockConfigured = false
+            return
+        }
+
+        isEdgeDockHiding = true
+        var endingFrame = edgeDockPanel.frame
+        endingFrame.origin.x = screen.visibleFrame.maxX + EdgeDockLayout.edgeOverlap + 4
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            edgeDockPanel.animator().setFrame(endingFrame, display: true)
+        }, completionHandler: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard self.isEdgeDockHiding else { return }
+                self.isEdgeDockHiding = false
+                self.edgeDockPanel.orderOut(nil)
+                self.edgeDockPanel.contentViewController = nil
+                self.isEdgeDockConfigured = false
+            }
+        })
+    }
+
+    private func edgeDockFrame(contentSize: NSSize?, on screen: NSScreen) -> NSRect {
+        var frame = edgeDockPanel.frame
+        if let contentSize, contentSize.width > 0, contentSize.height > 0 {
+            frame.size = contentSize
+        }
+        let visibleFrame = screen.visibleFrame
+        let verticalInset: CGFloat = 8
+        let minimumY = visibleFrame.minY + verticalInset
+        let maximumY = max(minimumY, visibleFrame.maxY - verticalInset - frame.height)
+        let centeredY = visibleFrame.midY - frame.height / 2
+        frame.origin.x = visibleFrame.maxX - frame.width + EdgeDockLayout.edgeOverlap
+        frame.origin.y = min(max(centeredY, minimumY), maximumY)
+        return frame
+    }
+
+    private func positionDashboardPanel(
+        contentSize: NSSize? = nil,
+        animated: Bool = false
+    ) {
+        guard let screen = dashboardPanel.screen
+                ?? statusItem?.button?.window?.screen
                 ?? NSScreen.main
                 ?? NSScreen.screens.first
         else { return }
@@ -140,48 +495,109 @@ final class StatusBarController: NSObject, ObservableObject {
 
         let safeFrame = screen.visibleFrame.insetBy(dx: 12, dy: 12)
         var frame = dashboardPanel.frame
+        if let contentSize {
+            frame.size = constrainedDashboardSize(contentSize, on: screen)
+        } else {
+            frame.size = constrainedDashboardSize(frame.size, on: screen)
+        }
         guard frame.width > 0, frame.height > 0 else { return }
 
-        // Use the screen center instead of the status-item anchor. The old
-        // anchor-based placement could push the restored wide canvas off the
-        // left edge when the status item was near the right edge.
-        let targetX = screen.visibleFrame.midX - frame.width / 2
-
-        // Always open below the menu bar. Never move the panel above the
-        // status item: that would put it over the menu bar and hide the icon.
-        let targetY = (buttonScreenFrame?.minY ?? screen.visibleFrame.maxY)
-            - frame.height - 6
-
+        // Period changes can alter the dashboard's intrinsic height. Keep the
+        // top edge stable while the lower edge grows or shrinks, so the
+        // header and period selector do not jump with the window. If the new
+        // size would leave the panel outside the visible area, the clamping
+        // below remains the final authority.
+        let currentTop = dashboardPanel.frame.maxY
+        let isAutomaticContentResize = contentSize != nil && hasDashboardPosition
         let maximumX = max(safeFrame.minX, safeFrame.maxX - frame.width)
         let maximumY = max(safeFrame.minY, safeFrame.maxY - frame.height)
-        frame.origin.x = min(max(targetX, safeFrame.minX), maximumX)
-        frame.origin.y = min(max(targetY, safeFrame.minY), maximumY)
-        dashboardPanel.setFrame(frame, display: true)
+        if hasDashboardPosition {
+            // Keep a user's chosen position when the display configuration
+            // changes. Content-driven height changes are top-anchored so the
+            // dashboard grows downward instead of moving both edges.
+            frame.origin.x = min(max(frame.origin.x, safeFrame.minX), maximumX)
+            if isAutomaticContentResize {
+                frame.origin.y = currentTop - frame.height
+            }
+            frame.origin.y = min(max(frame.origin.y, safeFrame.minY), maximumY)
+        } else {
+            // The first presentation still opens in a predictable place,
+            // below the menu bar and centered on the current display.
+            let targetX = screen.visibleFrame.midX - frame.width / 2
+            let targetY = (buttonScreenFrame?.minY ?? screen.visibleFrame.maxY)
+                - frame.height - 6
+            frame.origin.x = min(max(targetX, safeFrame.minX), maximumX)
+            frame.origin.y = min(max(targetY, safeFrame.minY), maximumY)
+        }
+        hasDashboardPosition = true
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.28
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                dashboardPanel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            dashboardPanel.setFrame(frame, display: true)
+        }
+    }
+
+    private func constrainedDashboardSize(_ size: NSSize, on screen: NSScreen? = nil) -> NSSize {
+        guard size.width > 0, size.height > 0 else { return size }
+        let targetScreen = screen ?? statusItem?.button?.window?.screen ?? NSScreen.main
+        let visibleFrame = targetScreen?.visibleFrame
+        let maximumHeight = DashboardLayout.maximumHeight(for: visibleFrame)
+        return NSSize(
+            width: size.width,
+            height: min(size.height, maximumHeight)
+        )
     }
 
     private func configureContextMenu() {
         contextMenu.autoenablesItems = false
+        contextMenu.removeAllItems()
 
         let refresh = NSMenuItem(
-            title: "刷新用量",
+            title: L10n.text(.menuRefresh),
             action: #selector(refreshUsage),
             keyEquivalent: ""
         )
         refresh.target = self
         contextMenu.addItem(refresh)
 
+        let dashboard = NSMenuItem(
+            title: L10n.text(.menuDashboard),
+            action: #selector(openDashboardFromMenu),
+            keyEquivalent: ""
+        )
+        dashboard.target = self
+        contextMenu.addItem(dashboard)
+
         let settings = NSMenuItem(
-            title: "账户设置…",
+            title: L10n.text(.menuSettings),
             action: #selector(openSettings),
             keyEquivalent: ""
         )
         settings.target = self
         contextMenu.addItem(settings)
 
+        let petTitle = desktopPetStore.preferences.isEnabled
+            ? PetUI.text("隐藏桌面宠物", "Hide Desktop Pet")
+            : PetUI.text("显示桌面宠物", "Show Desktop Pet")
+        let petShortcut = desktopPetStore.preferences.isEnabled
+            ? desktopPetStore.hidePetShortcut.displayName
+            : desktopPetStore.showPetShortcut.displayName
+        let pet = NSMenuItem(
+            title: "\(petTitle) (\(petShortcut))",
+            action: #selector(toggleDesktopPet),
+            keyEquivalent: ""
+        )
+        pet.target = self
+        contextMenu.addItem(pet)
+
         contextMenu.addItem(.separator())
 
         let quit = NSMenuItem(
-            title: "退出 AI Usage Bar",
+            title: L10n.text(.menuQuit),
             action: #selector(quitApplication),
             keyEquivalent: "q"
         )
@@ -191,7 +607,7 @@ final class StatusBarController: NSObject, ObservableObject {
 
     @objc private func handleStatusItemClick(_ sender: Any?) {
         guard let event = NSApp.currentEvent else {
-            togglePopover()
+            toggleEdgeDock()
             return
         }
 
@@ -199,41 +615,63 @@ final class StatusBarController: NSObject, ObservableObject {
         case .rightMouseDown, .rightMouseUp:
             showContextMenu()
         default:
-            togglePopover()
+            toggleEdgeDock()
         }
     }
 
-    private func togglePopover() {
+    private func toggleEdgeDock() {
+        if edgeDockPanel.isVisible, !isEdgeDockHiding {
+            hideEdgeDockPanel(animated: true)
+        } else {
+            if dashboardPanel.isVisible {
+                closeDashboard()
+            }
+            showEdgeDockPanel()
+        }
+    }
+
+    private func showDashboard() {
         guard statusItem?.button != nil else { return }
+        hideEdgeDockPanel(animated: true)
         if !isDashboardPanelConfigured {
             configureDashboardPanel()
         }
-        if dashboardPanel.isVisible {
-            closeDashboard()
-        } else {
-            store.refresh()
-            if dashboardPanel.contentView?.frame.size == .zero {
-                let initialSize = DashboardLayout.fittingSize(
-                    forModuleCount: 0,
-                    visibleFrame: dashboardScreenVisibleFrame
-                )
-                dashboardPanel.setContentSize(
-                    NSSize(width: initialSize.width, height: initialSize.height)
-                )
-            }
-            positionDashboardPanel()
-            dashboardPanel.orderFrontRegardless()
-            dashboardPanel.makeKey()
-            DispatchQueue.main.async { [weak self] in
-                self?.positionDashboardPanel()
-            }
-            installOutsideClickMonitors()
+        store.refresh(forceQuota: true)
+        if dashboardPanel.contentView?.frame.size == .zero {
+            let initialSize = DashboardLayout.fittingSize(
+                forModuleCount: 0,
+                visibleFrame: dashboardScreenVisibleFrame
+            )
+            dashboardPanel.setContentSize(
+                NSSize(width: initialSize.width, height: initialSize.height)
+            )
         }
+        positionDashboardPanel()
+        dashboardPanel.orderFrontRegardless()
+        dashboardPanel.makeKey()
+        DispatchQueue.main.async { [weak self] in
+            self?.positionDashboardPanel()
+        }
+        installOutsideClickMonitors()
     }
 
     private func closeDashboard() {
         dashboardPanel.orderOut(nil)
         removeOutsideClickMonitors()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window === dashboardPanel else { return }
+        hasDashboardPosition = true
+        dashboardPanel.saveFrame(usingName: dashboardFrameAutosaveName)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow,
+              window === dashboardPanel else { return }
+        hasDashboardPosition = true
+        dashboardPanel.saveFrame(usingName: dashboardFrameAutosaveName)
     }
 
     private func installOutsideClickMonitors() {
@@ -308,11 +746,23 @@ final class StatusBarController: NSObject, ObservableObject {
     }
 
     @objc private func refreshUsage() {
-        store.refresh()
+        store.refresh(forceQuota: true)
     }
 
     @objc private func openSettings() {
         SettingsWindowController.shared.show()
+    }
+
+    @objc private func toggleDesktopPet() {
+        if desktopPetStore.preferences.isEnabled {
+            DesktopPetWindowController.shared.hidePet()
+        } else {
+            DesktopPetWindowController.shared.showPet()
+        }
+    }
+
+    @objc private func openDashboardFromMenu() {
+        showDashboard()
     }
 
     @objc private func quitApplication() {
@@ -322,7 +772,7 @@ final class StatusBarController: NSObject, ObservableObject {
 }
 
 private enum CodexQuotaStatusImage {
-    static func make(remainingPercent: Int) -> NSImage {
+    static func make(remainingPercent: Int, usesWeeklyWarningStyle: Bool) -> NSImage {
         let size = NSSize(width: 15, height: 15)
         let image = NSImage(size: size)
         image.lockFocus()
@@ -355,7 +805,10 @@ private enum CodexQuotaStatusImage {
             endAngle: 90 - (360 * CGFloat(clamped) / 100),
             clockwise: true
         )
-        NSColor.systemBlue.setStroke()
+        let accent = usesWeeklyWarningStyle
+            ? NSColor(calibratedRed: 1.0, green: 0.58, blue: 0.60, alpha: 1)
+            : .systemBlue
+        accent.setStroke()
         progress.stroke()
         return image
     }

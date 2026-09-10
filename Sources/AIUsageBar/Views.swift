@@ -2,6 +2,15 @@ import AppKit
 import SwiftUI
 
 @main
+enum AIUsageBarEntryPoint {
+    static func main() {
+        if PetEventCommand.runIfNeeded() {
+            return
+        }
+        AIUsageBarApp.main()
+    }
+}
+
 struct AIUsageBarApp: App {
     @StateObject private var store: UsageStore
     @StateObject private var statusBar: StatusBarController
@@ -21,6 +30,7 @@ struct AIUsageBarApp: App {
 
 struct MenuBarLabel: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
 
     var body: some View {
         HStack(spacing: 4) {
@@ -30,12 +40,14 @@ struct MenuBarLabel: View {
                     .font(.system(size: 11, weight: .medium, design: .rounded))
             }
         }
-        .help("AI 使用概览")
+        .help(L10n.text(.overviewTitle, language: languageSettings.language))
     }
 }
 
 struct UsagePopover: View {
     @ObservedObject var store: UsageStore
+    @ObservedObject private var providerOrder = ProviderOrderStore.shared
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -45,7 +57,7 @@ struct UsagePopover: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(store.snapshots) { snapshot in
+                    ForEach(providerOrder.orderedSnapshots(store.snapshots)) { snapshot in
                         ProviderCard(snapshot: snapshot)
                     }
                 }
@@ -63,28 +75,33 @@ struct UsagePopover: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("AI 使用概览")
+                Text(L10n.text(.overviewTitle, language: languageSettings.language))
                     .font(.system(size: 18, weight: .semibold, design: .rounded))
-                Text(store.connectedCount > 0 ? "本机 AI 数据已接入" : "等待本机数据")
+                Text(
+                    L10n.text(
+                        store.connectedCount > 0 ? .localDataConnected : .waitingForData,
+                        language: languageSettings.language
+                    )
+                )
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Button {
-                store.refresh()
+                store.refresh(forceQuota: true)
             } label: {
                 Image(systemName: store.isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
                     .rotationEffect(.degrees(store.isRefreshing ? 360 : 0))
             }
             .buttonStyle(.borderless)
-            .help("立即刷新")
+            .help(L10n.text(.refreshNow, language: languageSettings.language))
             Button {
                 SettingsWindowController.shared.show()
             } label: {
                 Image(systemName: "gearshape")
             }
             .buttonStyle(.borderless)
-            .help("账户设置")
+            .help(L10n.text(.accountSettings, language: languageSettings.language))
         }
     }
 
@@ -93,16 +110,16 @@ struct UsagePopover: View {
             Circle()
                 .fill(Color.green)
                 .frame(width: 6, height: 6)
-            Text("每 30 秒自动刷新")
+            Text(L10n.text(.refreshEvery30Seconds, language: languageSettings.language))
             Spacer()
             if store.isRefreshing {
-                Text("更新中")
+                Text(L10n.text(.updating, language: languageSettings.language))
             } else if store.refreshError != nil {
-                Text("稍后重试")
+                Text(L10n.text(.retryLater, language: languageSettings.language))
             } else if let lastRefreshAt = store.lastRefreshAt {
                 Text(lastRefreshAt, style: .relative)
             } else {
-                Text("首次读取中")
+                Text(L10n.text(.firstRead, language: languageSettings.language))
             }
         }
         .font(.system(size: 11))
@@ -112,15 +129,17 @@ struct UsagePopover: View {
 
 struct ProviderCard: View {
     let snapshot: ProviderSnapshot
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
-                Image(systemName: snapshot.provider.symbolName)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(ProviderPalette.color(for: snapshot.provider))
-                    .frame(width: 22)
-                Text(snapshot.provider.displayName)
+                ProviderLogo(
+                    provider: snapshot.provider,
+                    size: 22,
+                    fallbackColor: ProviderPalette.color(for: snapshot.provider)
+                )
+                Text(L10n.providerName(snapshot.provider, language: languageSettings.language))
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                 Spacer()
                 StatusPill(state: snapshot.state)
@@ -144,6 +163,7 @@ struct ProviderCard: View {
 
 struct AccountBlock: View {
     let account: AccountUsageSnapshot
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -157,7 +177,7 @@ struct AccountBlock: View {
             }
 
             if account.metrics.isEmpty {
-                Text(account.message ?? "暂时没有可显示的指标")
+                Text(account.message ?? L10n.text(.noMetric, language: languageSettings.language))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -181,12 +201,13 @@ struct AccountBlock: View {
 
 struct MetricRow: View {
     let metric: UsageMetric
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
-                    Text(metric.title)
+                    Text(L10n.metricTitle(metric, language: languageSettings.language))
                         .font(.system(size: 12, weight: .medium))
                     Text(metric.window.title)
                         .font(.system(size: 10))
@@ -212,12 +233,12 @@ struct MetricRow: View {
                         .tint(progressColor(progress))
                         .frame(width: 100)
                     if let remaining = metric.remaining {
-                        Text("余 \(formatted(remaining))\(metric.unit == "%" ? "%" : "")")
+                        Text("\(L10n.text(.remaining, language: languageSettings.language)) \(formatted(remaining))\(metric.unit == "%" ? "%" : "")")
                             .font(.system(size: 10))
                             .foregroundStyle(.secondary)
                     }
                 } else if let remaining = metric.remaining {
-                    Text("余 \(formatted(remaining)) \(metric.unit)")
+                    Text("\(L10n.text(.remaining, language: languageSettings.language)) \(formatted(remaining)) \(L10n.localizedUnit(metric.unit, language: languageSettings.language))")
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
@@ -230,14 +251,14 @@ struct MetricRow: View {
             if metric.kind == .money {
                 return "\(NumberFormat.currency(used, unit: metric.unit)) / \(NumberFormat.currency(limit, unit: metric.unit))"
             }
-            return "\(formatted(used)) / \(formatted(limit)) \(metric.unit)"
+            return "\(formatted(used)) / \(formatted(limit)) \(L10n.localizedUnit(metric.unit, language: languageSettings.language))"
         }
         if let used = metric.used {
             if metric.kind == .money { return NumberFormat.currency(used, unit: metric.unit) }
-            return "\(formatted(used)) \(metric.unit)"
+            return "\(formatted(used)) \(L10n.localizedUnit(metric.unit, language: languageSettings.language))"
         }
         if let remaining = metric.remaining {
-            return "余 \(formatted(remaining)) \(metric.unit)"
+            return "\(L10n.text(.remaining, language: languageSettings.language)) \(formatted(remaining)) \(L10n.localizedUnit(metric.unit, language: languageSettings.language))"
         }
         return "—"
     }
@@ -256,13 +277,14 @@ struct MetricRow: View {
 
 struct StatusPill: View {
     let state: ProviderState
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
 
     var body: some View {
         HStack(spacing: 4) {
             Circle()
                 .fill(color)
                 .frame(width: 6, height: 6)
-            Text(state.title)
+            Text(L10n.stateTitle(state, language: languageSettings.language))
         }
         .font(.system(size: 10, weight: .medium))
         .foregroundStyle(color)
@@ -275,6 +297,7 @@ struct StatusPill: View {
         switch state {
         case .connected: return .green
         case .partial: return .orange
+        case .cached: return .purple
         case .unavailable: return .secondary
         }
     }
@@ -282,9 +305,10 @@ struct StatusPill: View {
 
 struct SourceBadge: View {
     let source: DataSource
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
 
     var body: some View {
-        Text(source.title)
+        Text(L10n.sourceTitle(source, language: languageSettings.language))
             .font(.system(size: 9, weight: .medium))
             .foregroundStyle(color)
             .padding(.horizontal, 4)
@@ -306,12 +330,16 @@ enum ProviderPalette {
     static func color(for provider: ProviderID) -> Color {
         switch provider {
         case .codex: return .green
+        case .kimi: return Color(red: 0.48, green: 0.62, blue: 1.0)
         case .chatGPT: return .teal
         case .qwenWork: return .blue
+        case .zcode: return .cyan
+        case .openCode: return .gray
+        case .doubaoWork: return .orange
+        case .qianwenOffice: return .cyan
         case .deepSeekHarness: return .pink
         case .workBuddy: return .indigo
         case .miniMax: return .purple
-        case .traeWork: return .orange
         }
     }
 }
@@ -319,6 +347,7 @@ enum ProviderPalette {
 struct AccountSettingsView: View {
     @StateObject private var store = AccountSettingsStore()
     @StateObject private var launchAtLogin = LaunchAtLoginSettings()
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
 
     var body: some View {
         Form {
@@ -328,16 +357,22 @@ struct AccountSettingsView: View {
                         get: { launchAtLogin.isEnabled },
                         set: { launchAtLogin.setEnabled($0) }
                     )
-                ) {
-                    Label("开机自启", systemImage: "power")
+                    ) {
+                    Label {
+                        Text(L10n.text(.launchAtLogin, language: languageSettings.language))
+                    } icon: {
+                        Image(systemName: "power")
+                    }
                 }
 
                 HStack(spacing: 6) {
                     Text(launchAtLogin.statusText)
                     Spacer()
                     if launchAtLogin.status == .requiresApproval {
-                        Button("打开系统设置…") {
+                        Button {
                             launchAtLogin.openLoginItemsSettings()
+                        } label: {
+                            Text(L10n.text(.openSystemSettings, language: languageSettings.language))
                         }
                         .buttonStyle(.link)
                     }
@@ -351,15 +386,44 @@ struct AccountSettingsView: View {
                         .foregroundStyle(.red)
                 }
             } header: {
-                Text("应用设置")
+                Text(L10n.text(.appSettings, language: languageSettings.language))
             } footer: {
-                Text("启用后，登录 macOS 账户时会自动启动 AI Usage Bar，并继续在菜单栏运行。")
+                Text(
+                    languageSettings.language == .simplifiedChinese
+                        ? "启用后，登录 macOS 账户时会自动启动 AI Usage Bar，并继续在菜单栏运行。"
+                        : languageSettings.language == .english
+                            ? "When enabled, AI Usage Bar starts automatically when you log in to macOS and continues running in the menu bar."
+                            : languageSettings.language == .japanese
+                                ? "有効にすると、macOSへのログイン時にAI Usage Barが自動起動し、メニューバーで実行されます。"
+                                : "활성화하면 macOS에 로그인할 때 AI Usage Bar가 자동으로 시작되어 메뉴 막대에서 실행됩니다."
+                )
+            }
+
+            Section {
+                AppUpdateSettings()
+            } header: {
+                Text(L10n.text(.softwareUpdate, language: languageSettings.language))
+            } footer: {
+                Text(L10n.text(.softwareUpdateHelp, language: languageSettings.language))
+            }
+
+            Section {
+                DesktopPetSettingsSection()
+            } header: {
+                Text(PetUI.text("桌面宠物", "Desktop Pet"))
+            } footer: {
+                Text(
+                    PetUI.text(
+                        "本机用量用于宠物成长；Codex 任务状态和可选的 Agent Hook 驱动实时动作。数据默认只保存在这台 Mac。",
+                        "Local usage grows your pet; Codex task state and optional agent hooks drive live reactions. Its data stays on this Mac by default."
+                    )
+                )
             }
 
             Section {
                 let trackedAccounts = store.accounts.filter { ProviderID.trackedCases.contains($0.provider) }
                 if trackedAccounts.isEmpty {
-                    Text("还没有手动添加的账户。")
+                    Text(L10n.text(.noManualAccounts, language: languageSettings.language))
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(trackedAccounts) { account in
@@ -387,19 +451,29 @@ struct AccountSettingsView: View {
                     }
                 }
             } header: {
-                Text("已配置账户")
+                Text(L10n.text(.configuredAccounts, language: languageSettings.language))
             }
 
             Section {
-                Picker("产品", selection: $store.provider) {
+                Picker(selection: $store.provider) {
                     ForEach(ProviderID.trackedCases) { provider in
                         Text(provider.displayName).tag(provider)
                     }
+                } label: {
+                    Text(L10n.text(.product, language: languageSettings.language))
                 }
-                TextField("账户名称", text: $store.name)
-                SecureField("API Key / Access Token", text: $store.credential)
-                Button("添加账户") {
+                TextField(
+                    L10n.text(.accountName, language: languageSettings.language),
+                    text: $store.name
+                )
+                SecureField(
+                    L10n.text(.accessToken, language: languageSettings.language),
+                    text: $store.credential
+                )
+                Button {
                     store.addAccount()
+                } label: {
+                    Text(L10n.text(.addAccount, language: languageSettings.language))
                 }
                 if let errorMessage = store.errorMessage {
                     Text(errorMessage)
@@ -407,13 +481,153 @@ struct AccountSettingsView: View {
                         .foregroundStyle(.red)
                 }
             } header: {
-                Text("添加服务端账户")
+                Text(L10n.text(.addServerAccount, language: languageSettings.language))
             } footer: {
-                Text("Codex 当前登录态会自动读取；千问办公的订阅 Credits 来自官方账户接口，本地日志补充请求和模型明细。需要读取官方额度时，可将 Access Token 保存到 macOS 钥匙串。")
+                Text(L10n.text(.credentialsFooter, language: languageSettings.language))
+            }
+
+            Section {
+                SidebarOrderEditor()
+            } header: {
+                Text(L10n.text(.sidebarOrder, language: languageSettings.language))
+            } footer: {
+                Text(L10n.text(.sidebarOrderHelp, language: languageSettings.language))
+            }
+
+            Section {
+                Picker(selection: Binding(
+                    get: { languageSettings.language },
+                    set: { languageSettings.setLanguage($0) }
+                )) {
+                    ForEach(AppLanguage.allCases) { language in
+                        Text(language.displayName).tag(language)
+                    }
+                } label: {
+                    Text(L10n.text(.language, language: languageSettings.language))
+                }
+            } footer: {
+                Text(L10n.text(.languageHelp, language: languageSettings.language))
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 430)
+        .frame(width: 600, height: 920)
         .padding(.top, 8)
+    }
+}
+
+private struct AppUpdateSettings: View {
+    @ObservedObject private var updater = AppUpdater.shared
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 9) {
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("AI Usage Bar")
+                        .font(.headline)
+                    Text(
+                        "\(L10n.text(.currentVersion, language: languageSettings.language)) " +
+                        AppUpdater.currentVersion
+                    )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            stateContent
+
+            HStack {
+                Button {
+                    updater.checkForUpdate(manual: true)
+                } label: {
+                    Label(
+                        L10n.text(.checkForUpdates, language: languageSettings.language),
+                        systemImage: "arrow.clockwise"
+                    )
+                }
+                .disabled(updater.state.isBusy || hasAvailableUpdate)
+
+                Spacer()
+
+                if case .available = updater.state {
+                    Button {
+                        updater.installUpdate()
+                    } label: {
+                        Text(L10n.text(.installUpdate, language: languageSettings.language))
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+    }
+
+    private var hasAvailableUpdate: Bool {
+        if case .available = updater.state { return true }
+        return false
+    }
+
+    @ViewBuilder
+    private var stateContent: some View {
+        switch updater.state {
+        case .idle:
+            EmptyView()
+        case .checking:
+            HStack(spacing: 7) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(L10n.text(.checkingForUpdates, language: languageSettings.language))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        case .upToDate:
+            Label(
+                L10n.text(.upToDate, language: languageSettings.language),
+                systemImage: "checkmark.circle.fill"
+            )
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .available(let release):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(
+                    "\(L10n.text(.updateAvailable, language: languageSettings.language)) · " +
+                    release.tag
+                )
+                    .font(.subheadline.weight(.semibold))
+                Text(release.assetName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .downloading(let progress):
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text(L10n.text(.downloadingUpdate, language: languageSettings.language))
+                    Spacer()
+                    Text("\(Int((progress * 100).rounded()))%")
+                        .monospacedDigit()
+                }
+                .font(.caption)
+                ProgressView(value: progress, total: 1)
+            }
+        case .installing:
+            HStack(spacing: 7) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(L10n.text(.installingUpdate, language: languageSettings.language))
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        case .failed(let failure):
+            Label(
+                L10n.updateFailureText(failure, language: languageSettings.language),
+                systemImage: "exclamationmark.triangle.fill"
+            )
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }

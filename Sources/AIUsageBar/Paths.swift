@@ -26,6 +26,15 @@ enum AppPaths {
         .appendingPathComponent("Library", isDirectory: true)
         .appendingPathComponent("Application Support", isDirectory: true)
         .appendingPathComponent("QwenWorkCN", isDirectory: true)
+    /// The consumer Qianwen desktop app keeps its agent sessions separately
+    /// from QwenWorkCN.  Its office mode writes one event stream per thread
+    /// below `qwen-agent/<account>/projects/.../sessions/...`.
+    static let qianwenDesktopSupport = home
+        .appendingPathComponent("Library", isDirectory: true)
+        .appendingPathComponent("Application Support", isDirectory: true)
+        .appendingPathComponent("Qianwen", isDirectory: true)
+    static let qianwenAgentRoot = qianwenDesktopSupport
+        .appendingPathComponent("qwen-agent", isDirectory: true)
     static let qwenWorkRoot = home.appendingPathComponent(".qwenworkcn", isDirectory: true)
     /// QwenWorkCN stores one JSONL transcript per session below this folder.
     /// The layout is `projects/<workspace>/<session>.jsonl`; sub-agent
@@ -43,8 +52,90 @@ enum AppPaths {
     ]
     static let qwenDatabase = qwenRoot.appendingPathComponent("data/agents.db")
 
+    /// ZCode stores its local App Usage ledger in the CLI data directory.
+    /// The desktop app and its bundled CLI share this SQLite database.
+    static let zcodeRoot = home.appendingPathComponent(".zcode", isDirectory: true)
+    static let zcodeDatabaseCandidates = [
+        zcodeRoot
+            .appendingPathComponent("cli", isDirectory: true)
+            .appendingPathComponent("db", isDirectory: true)
+            .appendingPathComponent("db.sqlite"),
+        zcodeRoot
+            .appendingPathComponent("v2", isDirectory: true)
+            .appendingPathComponent("db", isDirectory: true)
+            .appendingPathComponent("db.sqlite"),
+        home
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("ZCode", isDirectory: true)
+            .appendingPathComponent("db.sqlite")
+    ]
+
+    /// OpenCode stores its message ledger in an SQLite database. The
+    /// XDG path is the default used by the official CLI; the Application
+    /// Support and config paths cover macOS installations that override it.
+    static var openCodeDatabaseCandidates: [URL] {
+        var roots: [URL] = []
+        if let xdgDataHome = ProcessInfo.processInfo.environment["XDG_DATA_HOME"],
+           !xdgDataHome.isEmpty {
+            roots.append(URL(fileURLWithPath: xdgDataHome, isDirectory: true))
+        }
+        roots.append(contentsOf: [
+            home
+                .appendingPathComponent(".local", isDirectory: true)
+                .appendingPathComponent("share", isDirectory: true),
+            home
+                .appendingPathComponent("Library", isDirectory: true)
+                .appendingPathComponent("Application Support", isDirectory: true),
+            home.appendingPathComponent(".config", isDirectory: true)
+        ])
+
+        var seen: Set<String> = []
+        return roots.compactMap { root in
+            let directory = root.appendingPathComponent("opencode", isDirectory: true)
+            guard seen.insert(directory.path).inserted else { return nil }
+            return directory.appendingPathComponent("opencode.db")
+        }
+    }
+
+    /// Doubao Work keeps model-usage and task records in the chat IndexedDB
+    /// store, its network-event ledger in Tea, and mirrors recent events in
+    /// SDK logs.
+    static let doubaoWorkRoot = home
+        .appendingPathComponent("Library", isDirectory: true)
+        .appendingPathComponent("Application Support", isDirectory: true)
+        .appendingPathComponent("DoubaoWork", isDirectory: true)
+    static let doubaoWorkTeaDatabase = doubaoWorkRoot
+        .appendingPathComponent("Tea", isDirectory: true)
+        .appendingPathComponent("tea.db", isDirectory: true)
+    static let doubaoWorkChatDatabase = doubaoWorkRoot
+        .appendingPathComponent("Default", isDirectory: true)
+        .appendingPathComponent("IndexedDB", isDirectory: true)
+        .appendingPathComponent("chrome_doubaowork-chat_0.indexeddb.leveldb", isDirectory: true)
+    static let doubaoWorkSDKLogs = doubaoWorkRoot
+        .appendingPathComponent("sdk_storage", isDirectory: true)
+        .appendingPathComponent("log", isDirectory: true)
+
     static let deepSeekHarnessRoot = home.appendingPathComponent(".dsh", isDirectory: true)
     static let deepSeekHarnessSessions = deepSeekHarnessRoot
+        .appendingPathComponent("sessions", isDirectory: true)
+
+    /// KIMI Desktop keeps the local Agent runtime and the web membership
+    /// credential under the same application-support directory.  The
+    /// credential is read only for the official membership request and is
+    /// never written into AI Usage Bar's own cache.
+    static let kimiDesktopSupport = home
+        .appendingPathComponent("Library", isDirectory: true)
+        .appendingPathComponent("Application Support", isDirectory: true)
+        .appendingPathComponent("kimi-desktop", isDirectory: true)
+    static let kimiDaimon = kimiDesktopSupport
+        .appendingPathComponent("daimon-share", isDirectory: true)
+        .appendingPathComponent("daimon", isDirectory: true)
+    static let kimiDesktopConfig = kimiDaimon.appendingPathComponent("config.json")
+    static let kimiDesktopSessions = kimiDaimon
+        .appendingPathComponent("runtime", isDirectory: true)
+        .appendingPathComponent("kimi-code", isDirectory: true)
+        .appendingPathComponent("home", isDirectory: true)
         .appendingPathComponent("sessions", isDirectory: true)
 
     static let miniMaxSupport = home
@@ -65,42 +156,6 @@ enum AppPaths {
         .appendingPathComponent("v2", isDirectory: true)
         .appendingPathComponent("sessions", isDirectory: true)
 
-    /// TRAE Work desktop builds use these two Electron application-support
-    /// roots.  `TRAE SOLO CN` is the CN build name used by current releases;
-    /// `TRAE SOLO` is kept for older/current international-branded builds.
-    static let traeWorkSupportCandidates = [
-        home
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("TRAE SOLO CN", isDirectory: true),
-        home
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("TRAE SOLO", isDirectory: true),
-    ]
-
-    static let traeChinaSupportCandidates = [
-        home
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("Trae CN", isDirectory: true)
-    ]
-
-    /// Kept as a combined list for compatibility with older local readers.
-    static let traeSupportCandidates = traeWorkSupportCandidates + traeChinaSupportCandidates
-
-    /// Trae's local usage ledger. `TRAE SOLO CN` is the current TraeWork CN
-    /// application-support root; the standalone `Trae CN` root is kept for
-    /// older installs. Keep CN roots ahead of the international root because
-    /// the same machine can have both clients installed.
-    static let traeDatabaseCandidates = [
-        traeWorkSupportCandidates[0],
-        traeChinaSupportCandidates[0],
-        traeWorkSupportCandidates[1]
-    ].map {
-        $0.appendingPathComponent("ModularData/ai-agent/database.db")
-    }
-
     static let codexAuthCandidates = [
         codexRoot.appendingPathComponent("auth.json"),
         home
@@ -113,4 +168,10 @@ enum AppPaths {
         .appendingPathComponent("Library", isDirectory: true)
         .appendingPathComponent("Application Support", isDirectory: true)
         .appendingPathComponent("AIUsageBar", isDirectory: true)
+
+    /// The last successful provider snapshots are kept here so local usage
+    /// remains visible when a client is closed, its database is temporarily
+    /// locked, or AI Usage Bar itself is restarted.
+    static let usageSnapshotCache = appSupport.appendingPathComponent("usage-snapshots.json")
+    static let doubaoWorkScanCache = appSupport.appendingPathComponent("doubao-work-scan-cache.json")
 }

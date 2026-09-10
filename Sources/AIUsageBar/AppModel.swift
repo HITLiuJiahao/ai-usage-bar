@@ -1,6 +1,15 @@
 import Foundation
 import SwiftUI
 
+struct CodexStatusQuota {
+    let window: UsageWindow
+    let remaining: Int
+    /// A Plus-specific warning state for the menu-bar presentation. It is
+    /// deliberately tied to the exact source value instead of the rounded
+    /// percentage displayed to the user.
+    let isWeeklyQuotaWarning: Bool
+}
+
 @MainActor
 final class UsageStore: ObservableObject {
     @Published private(set) var snapshots: [ProviderSnapshot] = ProviderID.trackedCases.map(ProviderSnapshot.empty)
@@ -13,9 +22,16 @@ final class UsageStore: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var refreshInFlight = false
     private var refreshPending = false
+    private var forceQuotaRefreshPending = false
     private var retryCount = 0
 
     init() {
+        if let cachedSnapshots = UsageSnapshotCache.load() {
+            snapshots = ProviderID.trackedCases.map { provider in
+                cachedSnapshots.first(where: { $0.provider == provider })
+                    ?? ProviderSnapshot.empty(for: provider)
+            }
+        }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.refresh()
@@ -29,7 +45,10 @@ final class UsageStore: ObservableObject {
         refreshTask?.cancel()
     }
 
-    func refresh() {
+    func refresh(forceQuota: Bool = false) {
+        if forceQuota {
+            forceQuotaRefreshPending = true
+        }
         if refreshInFlight {
             // Do not start a second scan while one is active. Remember the
             // request and run exactly one follow-up pass when this one ends.
@@ -50,14 +69,16 @@ final class UsageStore: ObservableObject {
 
         while true {
             refreshPending = false
-            let hasUsableData = await performRefreshPass()
+            let forceQuota = forceQuotaRefreshPending
+            forceQuotaRefreshPending = false
+            let hasUsableData = await performRefreshPass(forceCodexQuota: forceQuota)
 
             // Match Tokei's initial-load retry behavior. Providers return a
             // snapshot instead of throwing, so a retry is useful only when
             // the whole first pass produced no usable data.
             if !hasUsableData && !refreshPending && !Task.isCancelled && retryCount < 3 {
                 retryCount += 1
-                refreshError = "读取用量失败，\(retryCount)/3 秒后重试"
+                refreshError = L10n.readFailedRetry(count: retryCount)
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
                 if Task.isCancelled { break }
                 continue
@@ -78,16 +99,21 @@ final class UsageStore: ObservableObject {
         refreshTask = nil
     }
 
-    private func performRefreshPass() async -> Bool {
+    private func performRefreshPass(forceCodexQuota: Bool) async -> Bool {
         refreshError = nil
         let providers = ProviderRegistry.all
+
+        // Pricing files can be updated while the app is running. Refresh the
+        // shared pricing catalog before providers start concurrently so every
+        // local adapter uses the same price version for this pass.
+        CodexPricing.refresh()
 
         // Each provider is independent. Fetch them concurrently so a slow
         // network endpoint cannot hold back local log based providers.
         await withTaskGroup(of: ProviderSnapshot.self) { group in
             for provider in providers {
                 group.addTask(priority: .utility) {
-                    await provider.fetch()
+                    await provider.fetch(forceRefresh: forceCodexQuota && provider.id == .codex)
                 }
             }
 
@@ -96,24 +122,27 @@ final class UsageStore: ObservableObject {
                     continue
                 }
 
-                // Keep the last usable result when a transient endpoint
-                // failure returns an empty unavailable snapshot, just as
-                // Tokei keeps its last successful usage while retrying.
+                // Keep the last usable result when a local source is empty or
+                // temporarily unavailable. Closing a client must not erase
+                // the historical usage already shown by the dashboard.
                 let previous = snapshots[index]
-                if snapshot.state == .unavailable,
-                   previous.state != .unavailable,
-                   previous.metricCount > 0 {
+                if snapshot.provider != .doubaoWork,
+                   previous.metricCount > 0,
+                   (snapshot.metricCount == 0 || snapshot.state == .unavailable) {
+                    snapshots[index] = UsageSnapshotCache.cachedFallback(previous)
                     continue
                 }
                 snapshots[index] = snapshot
             }
         }
 
+        UsageSnapshotCache.save(snapshots)
+
         let hasUsableData = snapshots.contains { snapshot in
             snapshot.state != .unavailable && snapshot.metricCount > 0
         }
         if !hasUsableData {
-            refreshError = "暂未读取到可用用量"
+            refreshError = L10n.text(.usageUnavailable)
         }
         return hasUsableData
     }
@@ -122,18 +151,78 @@ final class UsageStore: ObservableObject {
         snapshots.filter { $0.state != .unavailable }.count
     }
 
+    var codexFiveHoursRemainingPercent: Int? {
+        codexRemainingPercent(for: .fiveHours)
+    }
+
     var codexWeeklyRemainingPercent: Int? {
-        let weeklyMetric = snapshots
-            .first(where: { $0.provider == .codex })?
-            .accounts
-            .flatMap(\.metrics)
-            .first(where: { metric in
-                metric.kind == .quota && metric.window == .weekly
-            })
-        guard let remaining = weeklyMetric?.remaining, remaining.isFinite else {
+        codexRemainingPercent(for: .weekly)
+    }
+
+    /// Prefer the short rolling window when the account exposes it. For Plus,
+    /// a critical seven-day balance takes priority so the menu bar surfaces
+    /// the quota that needs attention. Plans without a five-hour bucket still
+    /// fall back to their seven-day quota instead of going blank.
+    var codexStatusQuota: CodexStatusQuota? {
+        let accounts = codexAccounts
+
+        for account in accounts where isCodexPlus(account.planName) {
+            if let weeklyQuota = quotaMetric(in: account, window: .weekly),
+               let remaining = weeklyQuota.remaining,
+               remaining.isFinite,
+               remaining < 20 {
+                return CodexStatusQuota(
+                    window: .weekly,
+                    remaining: roundedRemainingPercent(remaining),
+                    isWeeklyQuotaWarning: true
+                )
+            }
+        }
+
+        for account in accounts {
+            for window in [UsageWindow.fiveHours, .weekly] {
+                if let remaining = quotaMetric(in: account, window: window)?.remaining,
+                   remaining.isFinite {
+                    return CodexStatusQuota(
+                        window: window,
+                        remaining: roundedRemainingPercent(remaining),
+                        isWeeklyQuotaWarning: false
+                    )
+                }
+            }
+        }
+        return nil
+    }
+
+    private func codexRemainingPercent(for window: UsageWindow) -> Int? {
+        guard let remaining = codexAccounts
+            .compactMap({ quotaMetric(in: $0, window: window)?.remaining })
+            .first(where: { $0.isFinite }) else {
             return nil
         }
-        return Int(min(max(remaining, 0), 100).rounded())
+        return roundedRemainingPercent(remaining)
+    }
+
+    private var codexAccounts: [AccountUsageSnapshot] {
+        snapshots.first(where: { $0.provider == .codex })?.accounts ?? []
+    }
+
+    private func quotaMetric(in account: AccountUsageSnapshot, window: UsageWindow) -> UsageMetric? {
+        account.metrics.first { metric in
+            metric.kind == .quota && metric.window == window
+        }
+    }
+
+    private func roundedRemainingPercent(_ remaining: Double) -> Int {
+        Int(min(max(remaining, 0), 100).rounded())
+    }
+
+    private func isCodexPlus(_ planName: String?) -> Bool {
+        guard let planName else { return false }
+        let words = planName
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+        return words.contains("plus")
     }
 
     var criticalPercent: Int? {

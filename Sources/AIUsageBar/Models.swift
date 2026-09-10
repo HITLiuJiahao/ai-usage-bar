@@ -2,91 +2,74 @@ import Foundation
 
 enum ProviderID: String, CaseIterable, Codable, Identifiable {
     case codex
+    case kimi
     case chatGPT
     case qwenWork
+    case zcode
+    case openCode
+    case doubaoWork
+    case qianwenOffice
     case deepSeekHarness
     case workBuddy
     case miniMax
-    case traeWork
 
     var id: String { rawValue }
 
-    // Keep the older identifiers decodable for existing account settings while
-    // keeping the dashboard order stable for the two-column layout.
+    // Keep the dashboard order stable for the two-column layout.
     static let trackedCases: [ProviderID] = [
-        .codex, .qwenWork,
-        .workBuddy, .deepSeekHarness,
-        .traeWork, .miniMax
+        .codex, .kimi, .qwenWork, .zcode, .doubaoWork,
+        .workBuddy, .miniMax,
+        .openCode, .qianwenOffice, .deepSeekHarness
     ]
 
     var displayName: String {
-        switch self {
-        case .codex: return "Codex"
-        case .chatGPT: return "ChatGPT"
-        case .qwenWork: return "千问办公"
-        case .deepSeekHarness: return "DeepSeek Harness"
-        case .workBuddy: return "WorkBuddy"
-        case .miniMax: return "MiniMax Code"
-        case .traeWork: return "TraeWork CN"
-        }
+        L10n.providerName(self)
     }
 
     var shortName: String {
-        switch self {
-        case .codex: return "Codex"
-        case .chatGPT: return "ChatGPT"
-        case .qwenWork: return "QwenWork"
-        case .deepSeekHarness: return "DeepSeek"
-        case .workBuddy: return "WorkBuddy"
-        case .miniMax: return "MiniMax"
-        case .traeWork: return "TraeWork"
-        }
+        L10n.providerName(self)
     }
 
     var symbolName: String {
         switch self {
         case .codex: return "terminal"
+        case .kimi: return "sparkles"
         case .chatGPT: return "bubble.left.and.bubble.right"
         case .qwenWork: return "sparkles"
+        case .zcode: return "chevron.left.forwardslash.chevron.right"
+        case .openCode: return "terminal.fill"
+        case .doubaoWork: return "briefcase.fill"
+        case .qianwenOffice: return "briefcase.fill"
         case .deepSeekHarness: return "brain.head.profile"
         case .workBuddy: return "person.2.wave.2"
         case .miniMax: return "hexagon"
-        case .traeWork: return "bolt.horizontal.circle"
         }
     }
 }
 
-enum ProviderState {
+enum ProviderState: Codable {
     case connected
     case partial
+    case cached
     case unavailable
 
     var title: String {
-        switch self {
-        case .connected: return "已连接"
-        case .partial: return "部分可用"
-        case .unavailable: return "暂不可用"
-        }
+        L10n.stateTitle(self)
     }
 }
 
-enum DataSource {
+enum DataSource: Codable {
     case server
     case local
     case cached
     case unavailable
 
     var title: String {
-        switch self {
-        case .server: return "服务端"
-        case .local: return "本地日志"
-        case .cached: return "本机缓存"
-        case .unavailable: return "未读取"
-        }
+        L10n.sourceTitle(self)
     }
 }
 
-enum MetricKind {
+enum MetricKind: Codable {
     case tokens
     case requests
     case duration
@@ -95,7 +78,7 @@ enum MetricKind {
     case quota
 }
 
-enum UsageWindow: String {
+enum UsageWindow: String, Codable {
     case today
     case yesterday
     case fiveHours
@@ -108,22 +91,11 @@ enum UsageWindow: String {
     case billing
 
     var title: String {
-        switch self {
-        case .today: return "今日"
-        case .yesterday: return "昨日"
-        case .fiveHours: return "5 小时"
-        case .daily: return "每日"
-        case .weekly: return "本周"
-        case .lastWeek: return "上周"
-        case .monthly: return "本月"
-        case .lastMonth: return "上月"
-        case .yearly: return "本年"
-        case .billing: return "订阅周期"
-        }
+        L10n.windowTitle(self)
     }
 }
 
-struct UsageMetric: Identifiable {
+struct UsageMetric: Identifiable, Codable {
     let key: String
     let title: String
     let kind: MetricKind
@@ -205,7 +177,7 @@ struct UsageMetric: Identifiable {
     }
 }
 
-struct ModelUsage: Identifiable {
+struct ModelUsage: Identifiable, Codable {
     let name: String
     let window: UsageWindow
     var tokens = TokenBreakdown()
@@ -258,11 +230,13 @@ struct ModelUsage: Identifiable {
     }
 }
 
-struct AccountUsageSnapshot: Identifiable {
+struct AccountUsageSnapshot: Identifiable, Codable {
     let id: String
     let provider: ProviderID
     let accountName: String
     let planName: String?
+    let resetCreditsAvailableCount: Int?
+    let resetCreditsExpiresAt: Date?
     let state: ProviderState
     let metrics: [UsageMetric]
     let updatedAt: Date
@@ -275,6 +249,8 @@ struct AccountUsageSnapshot: Identifiable {
         provider: ProviderID,
         accountName: String,
         planName: String? = nil,
+        resetCreditsAvailableCount: Int? = nil,
+        resetCreditsExpiresAt: Date? = nil,
         state: ProviderState,
         metrics: [UsageMetric],
         updatedAt: Date,
@@ -286,6 +262,8 @@ struct AccountUsageSnapshot: Identifiable {
         self.provider = provider
         self.accountName = accountName
         self.planName = planName
+        self.resetCreditsAvailableCount = resetCreditsAvailableCount
+        self.resetCreditsExpiresAt = resetCreditsExpiresAt
         self.state = state
         self.metrics = metrics
         self.updatedAt = updatedAt
@@ -295,7 +273,7 @@ struct AccountUsageSnapshot: Identifiable {
     }
 }
 
-struct ProviderSnapshot: Identifiable {
+struct ProviderSnapshot: Identifiable, Codable {
     let provider: ProviderID
     let accounts: [AccountUsageSnapshot]
     let state: ProviderState
