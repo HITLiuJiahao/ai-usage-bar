@@ -184,7 +184,7 @@ enum L10n {
     private static let translations: [AppLanguage: [Key: String]] = [
         .simplifiedChinese: [
             .overviewTitle: "AI 使用概览",
-            .overviewSubtitle: "Codex · KIMI Desktop · ZCode · 豆包工作 · MiniMax Code · WorkBuddy · QwenWork · Token、模型与用量",
+            .overviewSubtitle: "Token、模型、用量、桌面宠物等特性",
             .updated: "更新",
             .reading: "正在读取",
             .localDataConnected: "本机 AI 数据已接入",
@@ -313,7 +313,7 @@ enum L10n {
         ],
         .english: [
             .overviewTitle: "AI Usage Overview",
-            .overviewSubtitle: "Codex · KIMI Desktop · ZCode · Doubao Work · MiniMax Code · WorkBuddy · QwenWork · tokens, models, and usage",
+            .overviewSubtitle: "tokens, models, usage, desktop pet, and more",
             .updated: "Updated",
             .reading: "Reading",
             .localDataConnected: "Local AI data connected",
@@ -442,7 +442,7 @@ enum L10n {
         ],
         .japanese: [
             .overviewTitle: "AI 使用状況",
-            .overviewSubtitle: "Codex · KIMI Desktop · ZCode · 豆包ワーク · MiniMax Code · WorkBuddy · QwenWork · トークン、モデル、使用量",
+            .overviewSubtitle: "トークン、モデル、使用量、デスクトップペットなどの機能",
             .updated: "更新",
             .reading: "読み込み中",
             .localDataConnected: "このMacのAIデータを接続済み",
@@ -571,7 +571,7 @@ enum L10n {
         ],
         .korean: [
             .overviewTitle: "AI 사용량 개요",
-            .overviewSubtitle: "Codex · KIMI Desktop · ZCode · Doubao Work · MiniMax Code · WorkBuddy · QwenWork · 토큰, 모델 및 사용량",
+            .overviewSubtitle: "토큰, 모델, 사용량, 데스크톱 펫 등의 기능",
             .updated: "업데이트",
             .reading: "읽는 중",
             .localDataConnected: "로컬 AI 데이터 연결됨",
@@ -1182,7 +1182,9 @@ enum L10n {
 
     static func codexStatusTooltip(
         remaining: Int?,
+        weeklyRemaining: Int? = nil,
         window: UsageWindow = .fiveHours,
+        sidebarDisabled: Bool = false,
         language: AppLanguage = AppLanguageSettings.currentLanguage
     ) -> String {
         guard let remaining else {
@@ -1207,15 +1209,31 @@ enum L10n {
         default:
             windowName = window.title
         }
+        let weeklyText: String?
+        if let weeklyRemaining,
+           window != .weekly || weeklyRemaining != remaining {
+            weeklyText = "\(weeklyRemaining)%"
+        } else {
+            weeklyText = nil
+        }
+        let actionText: String
         switch language {
         case .simplifiedChinese:
-            return "Codex：\(windowName)剩余 \(remaining)% · 点击唤醒侧边栏"
+            let weeklySuffix = weeklyText.map { " · 周额度剩余 \($0)" } ?? ""
+            actionText = sidebarDisabled ? "点击打开完整概览" : "点击唤醒侧边栏"
+            return "Codex：\(windowName)剩余 \(remaining)%\(weeklySuffix) · \(actionText)"
         case .english:
-            return "Codex: \(windowName) quota \(remaining)% remaining · Click to open the sidebar"
+            let weeklySuffix = weeklyText.map { " · Weekly quota \($0) remaining" } ?? ""
+            actionText = sidebarDisabled ? "Click to open the full overview" : "Click to open the sidebar"
+            return "Codex: \(windowName) quota \(remaining)% remaining\(weeklySuffix) · \(actionText)"
         case .japanese:
-            return "Codex：\(windowName)クォータ残り \(remaining)% · クリックしてサイドバーを開く"
+            let weeklySuffix = weeklyText.map { " · 週間クォータ残り \($0)" } ?? ""
+            actionText = sidebarDisabled ? "クリックして完全な概要を開く" : "クリックしてサイドバーを開く"
+            return "Codex：\(windowName)クォータ残り \(remaining)%\(weeklySuffix) · \(actionText)"
         case .korean:
-            return "Codex: \(windowName) 한도 \(remaining)% 남음 · 클릭하여 사이드바 열기"
+            let weeklySuffix = weeklyText.map { " · 주간 한도 \($0) 남음" } ?? ""
+            actionText = sidebarDisabled ? "클릭하여 전체 개요 열기" : "클릭하여 사이드바 열기"
+            return "Codex: \(windowName) 한도 \(remaining)% 남음\(weeklySuffix) · \(actionText)"
         }
     }
 

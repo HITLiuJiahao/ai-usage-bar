@@ -32,6 +32,7 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
     private var isEdgeDockConfigured = false
     private var isEdgeDockHiding = false
     private var activeEdgeDockSide: EdgeDockSide?
+    private var activeEdgeDockScreen: NSScreen?
     private var configuredEdgeDockSide: EdgeDockSide?
     private var hasDashboardPosition = false
     private let dashboardFrameAutosaveName = "AIUsageBar.dashboard"
@@ -73,6 +74,7 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.handleEdgeDockExpansionModeChange()
+                self?.updateStatusItem()
             }
             .store(in: &cancellables)
         updateStatusItem()
@@ -135,10 +137,10 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
         guard let button = statusItem?.button else { return }
         let statusQuota = store.codexStatusQuota
         if let statusQuota {
-            let remaining = statusQuota.remaining
+            let remaining = statusQuota.primaryRemaining
             button.image = CodexQuotaStatusImage.make(
-                remainingPercent: remaining,
-                usesWeeklyWarningStyle: statusQuota.isWeeklyQuotaWarning
+                fiveHourRemainingPercent: remaining,
+                weeklyRemainingPercent: statusQuota.weeklyRemaining
             )
             button.attributedTitle = NSAttributedString(
                 string: "\(remaining)%",
@@ -152,7 +154,9 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
             button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
             button.toolTip = L10n.codexStatusTooltip(
                 remaining: remaining,
-                window: statusQuota.window
+                weeklyRemaining: statusQuota.weeklyRemaining,
+                window: statusQuota.primaryWindow,
+                sidebarDisabled: edgeDockExpansionSettings.mode.isDisabled
             )
         } else {
             button.image = NSImage(
@@ -204,7 +208,10 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
         isDashboardPanelConfigured = true
     }
 
-    private func configureEdgeDockPanel(for side: EdgeDockSide) {
+    private func configureEdgeDockPanel(
+        for side: EdgeDockSide,
+        on screen: NSScreen? = nil
+    ) {
         guard !isEdgeDockConfigured else { return }
 
         edgeDockPanel.contentViewController = NSHostingController(
@@ -235,7 +242,7 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
         isEdgeDockConfigured = true
         configuredEdgeDockSide = side
 
-        positionEdgeDockPanel(on: edgeDockScreen, side: side)
+        positionEdgeDockPanel(on: screen ?? edgeDockScreen, side: side)
     }
 
     private var dashboardScreenVisibleFrame: CGRect? {
@@ -311,7 +318,10 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
         side: EdgeDockSide? = nil
     ) {
         guard !edgeDockExpansionSettings.mode.isDisabled,
-              let screen = screen ?? edgeDockScreen
+              let screen = screen
+                ?? activeEdgeDockScreen
+                ?? edgeDockPanel.screen
+                ?? edgeDockScreen
         else { return }
 
         let side = side
@@ -460,6 +470,7 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
         let wasHiding = isEdgeDockHiding
         let previousSide = activeEdgeDockSide
         activeEdgeDockSide = targetSide
+        activeEdgeDockScreen = screen
 
         if isEdgeDockConfigured, configuredEdgeDockSide != targetSide {
             edgeDockPanel.contentViewController = nil
@@ -467,7 +478,7 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
             configuredEdgeDockSide = nil
         }
         if !isEdgeDockConfigured {
-            configureEdgeDockPanel(for: targetSide)
+            configureEdgeDockPanel(for: targetSide, on: screen)
         }
 
         if wasVisible, !wasHiding {
@@ -511,13 +522,14 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
         cancelEdgeDockHide()
         guard edgeDockPanel.isVisible || isEdgeDockHiding else {
             activeEdgeDockSide = nil
+            activeEdgeDockScreen = nil
             return
         }
 
         let side = activeEdgeDockSide
             ?? configuredEdgeDockSide
             ?? preferredEdgeDockSide
-        let screen = edgeDockPanel.screen ?? edgeDockScreen
+        let screen = edgeDockPanel.screen ?? activeEdgeDockScreen ?? edgeDockScreen
 
         guard animated, let screen, !isEdgeDockHiding else {
             resetEdgeDockPanel()
@@ -550,6 +562,7 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
         edgeDockPanel.contentViewController = nil
         isEdgeDockConfigured = false
         activeEdgeDockSide = nil
+        activeEdgeDockScreen = nil
         configuredEdgeDockSide = nil
     }
 
@@ -926,44 +939,76 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
 }
 
 private enum CodexQuotaStatusImage {
-    static func make(remainingPercent: Int, usesWeeklyWarningStyle: Bool) -> NSImage {
-        let size = NSSize(width: 15, height: 15)
+    static func make(
+        fiveHourRemainingPercent: Int,
+        weeklyRemainingPercent: Int?
+    ) -> NSImage {
+        // Match the menu bar's full icon height while leaving the title's
+        // baseline and the status item margins untouched.
+        let size = NSSize(width: 24, height: 22)
         let image = NSImage(size: size)
         image.lockFocus()
         defer { image.unlockFocus() }
 
-        let center = NSPoint(x: size.width / 2, y: size.height / 2)
-        let radius = min(size.width, size.height) / 2 - 2
+        let ringCenter = NSPoint(x: size.width / 2, y: 14)
+        let ringRadius: CGFloat = 6.0
         let track = NSBezierPath(
             ovalIn: NSRect(
-                x: center.x - radius,
-                y: center.y - radius,
-                width: radius * 2,
-                height: radius * 2
+                x: ringCenter.x - ringRadius,
+                y: ringCenter.y - ringRadius,
+                width: ringRadius * 2,
+                height: ringRadius * 2
             )
         )
-        track.lineWidth = 2
+        track.lineWidth = 2.1
         NSColor.white.withAlphaComponent(0.24).setStroke()
         track.stroke()
 
-        let clamped = min(max(remainingPercent, 0), 100)
-        guard clamped > 0 else { return image }
+        let clampedFiveHour = min(max(fiveHourRemainingPercent, 0), 100)
+        if clampedFiveHour > 0 {
+            let progress = NSBezierPath()
+            progress.lineWidth = 2.1
+            progress.lineCapStyle = .round
+            progress.appendArc(
+                withCenter: ringCenter,
+                radius: ringRadius,
+                startAngle: 90,
+                endAngle: 90 - (360 * CGFloat(clampedFiveHour) / 100),
+                clockwise: true
+            )
+            NSColor.systemBlue.setStroke()
+            progress.stroke()
+        }
 
-        let progress = NSBezierPath()
-        progress.lineWidth = 2
-        progress.lineCapStyle = .round
-        progress.appendArc(
-            withCenter: center,
-            radius: radius,
-            startAngle: 90,
-            endAngle: 90 - (360 * CGFloat(clamped) / 100),
-            clockwise: true
+        let barFrame = NSRect(x: 3, y: 2.5, width: 18, height: 3.2)
+        let barRadius = barFrame.height / 2
+        let barTrack = NSBezierPath(
+            roundedRect: barFrame,
+            xRadius: barRadius,
+            yRadius: barRadius
         )
-        let accent = usesWeeklyWarningStyle
-            ? NSColor(calibratedRed: 1.0, green: 0.58, blue: 0.60, alpha: 1)
-            : .systemBlue
-        accent.setStroke()
-        progress.stroke()
+        NSColor.white.withAlphaComponent(0.24).setFill()
+        barTrack.fill()
+
+        if let weeklyRemainingPercent {
+            let clamped = min(max(weeklyRemainingPercent, 0), 100)
+            if clamped > 0 {
+                let remainingWidth = barFrame.width * CGFloat(clamped) / 100
+                let remainingFrame = NSRect(
+                    x: barFrame.minX,
+                    y: barFrame.minY,
+                    width: remainingWidth,
+                    height: barFrame.height
+                )
+                let remainingBar = NSBezierPath(
+                    roundedRect: remainingFrame,
+                    xRadius: barRadius,
+                    yRadius: barRadius
+                )
+                NSColor.systemBlue.setFill()
+                remainingBar.fill()
+            }
+        }
         return image
     }
 }

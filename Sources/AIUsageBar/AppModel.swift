@@ -2,12 +2,18 @@ import Foundation
 import SwiftUI
 
 struct CodexStatusQuota {
-    let window: UsageWindow
-    let remaining: Int
-    /// A Plus-specific warning state for the menu-bar presentation. It is
-    /// deliberately tied to the exact source value instead of the rounded
-    /// percentage displayed to the user.
-    let isWeeklyQuotaWarning: Bool
+    /// The five-hour quota is the primary menu-bar number and ring.
+    let fiveHourRemaining: Int?
+    /// The weekly quota is shown as the five-dot secondary indicator.
+    let weeklyRemaining: Int?
+
+    var primaryRemaining: Int {
+        fiveHourRemaining ?? weeklyRemaining ?? 0
+    }
+
+    var primaryWindow: UsageWindow {
+        fiveHourRemaining == nil ? .weekly : .fiveHours
+    }
 }
 
 @MainActor
@@ -159,39 +165,19 @@ final class UsageStore: ObservableObject {
         codexRemainingPercent(for: .weekly)
     }
 
-    /// Prefer the short rolling window when the account exposes it. For Plus,
-    /// a critical seven-day balance takes priority so the menu bar surfaces
-    /// the quota that needs attention. Plans without a five-hour bucket still
-    /// fall back to their seven-day quota instead of going blank.
+    /// Keep both Codex quota windows available to the menu bar. The five-hour
+    /// quota is the primary number/ring, while the weekly quota is the
+    /// secondary five-dot indicator. Plans without a five-hour bucket still
+    /// fall back to their weekly quota instead of going blank.
     var codexStatusQuota: CodexStatusQuota? {
-        let accounts = codexAccounts
+        let fiveHourRemaining = codexRemainingPercent(for: .fiveHours)
+        let weeklyRemaining = codexRemainingPercent(for: .weekly)
+        guard fiveHourRemaining != nil || weeklyRemaining != nil else { return nil }
 
-        for account in accounts where isCodexPlus(account.planName) {
-            if let weeklyQuota = quotaMetric(in: account, window: .weekly),
-               let remaining = weeklyQuota.remaining,
-               remaining.isFinite,
-               remaining < 20 {
-                return CodexStatusQuota(
-                    window: .weekly,
-                    remaining: roundedRemainingPercent(remaining),
-                    isWeeklyQuotaWarning: true
-                )
-            }
-        }
-
-        for account in accounts {
-            for window in [UsageWindow.fiveHours, .weekly] {
-                if let remaining = quotaMetric(in: account, window: window)?.remaining,
-                   remaining.isFinite {
-                    return CodexStatusQuota(
-                        window: window,
-                        remaining: roundedRemainingPercent(remaining),
-                        isWeeklyQuotaWarning: false
-                    )
-                }
-            }
-        }
-        return nil
+        return CodexStatusQuota(
+            fiveHourRemaining: fiveHourRemaining,
+            weeklyRemaining: weeklyRemaining
+        )
     }
 
     private func codexRemainingPercent(for window: UsageWindow) -> Int? {
@@ -215,14 +201,6 @@ final class UsageStore: ObservableObject {
 
     private func roundedRemainingPercent(_ remaining: Double) -> Int {
         Int(min(max(remaining, 0), 100).rounded())
-    }
-
-    private func isCodexPlus(_ planName: String?) -> Bool {
-        guard let planName else { return false }
-        let words = planName
-            .lowercased()
-            .split { !$0.isLetter && !$0.isNumber }
-        return words.contains("plus")
     }
 
     var criticalPercent: Int? {

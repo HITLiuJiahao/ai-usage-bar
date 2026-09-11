@@ -800,7 +800,7 @@ struct DoubaoWorkProvider: UsageProvider {
             state = .unavailable
         }
 
-        let message: String
+        var message: String
         if scan.responseCount > 0 {
             switch scan.countSource {
             case .chatUsage:
@@ -814,6 +814,11 @@ struct DoubaoWorkProvider: UsageProvider {
             case .none:
                 message = "已读取豆包工作本机日志，但当前没有可计数的工作任务。"
             }
+            if scan.modelUsages.isEmpty {
+                message += "\n当前日志未暴露可可靠复原的具体模型名，按模型明细暂无法拆分。"
+            } else {
+                message += "\n已从本机聊天或请求记录解析到具体模型名；仅显示日志明确提供的名称。"
+            }
         } else if hasRoot || scan.hasLogFiles {
             message = "已找到豆包工作本机日志，但暂未识别到工作模式模型完成事件；后台本地工具流不会被当作请求次数。"
         } else {
@@ -826,7 +831,8 @@ struct DoubaoWorkProvider: UsageProvider {
             state: state,
             metrics: metrics,
             message: message,
-            source: scan.responseCount > 0 ? .local : .unavailable
+            source: scan.responseCount > 0 ? .local : .unavailable,
+            modelUsages: scan.modelUsages
         )
     }
 }
