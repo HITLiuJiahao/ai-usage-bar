@@ -150,8 +150,9 @@ struct ResetCreditIcon: View {
 enum EdgeDockLayout {
     static let railWidth: CGFloat = 82
     static let detailWidth: CGFloat = 286
-    // Leave enough vertical room for the direct period selector and detail footer.
-    static let panelHeight: CGFloat = 680
+    // Leave enough vertical room for the period selector, detail footer, and
+    // the fifth model row without making the edge dock feel oversized.
+    static let panelHeight: CGFloat = 736
     static let panelSpacing: CGFloat = 9
     static let panelPadding: CGFloat = 10
     // Keep the first and last provider items inside the two large edge arcs.
@@ -179,6 +180,7 @@ struct EdgeDockView: View {
     @ObservedObject var store: UsageStore
     @ObservedObject private var providerOrder = ProviderOrderStore.shared
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
+    let side: EdgeDockSide
     let onSizeChange: (CGSize) -> Void
     let onOpenDashboard: () -> Void
 
@@ -187,41 +189,25 @@ struct EdgeDockView: View {
 
     init(
         store: UsageStore,
+        side: EdgeDockSide = .right,
         onSizeChange: @escaping (CGSize) -> Void = { _ in },
         onOpenDashboard: @escaping () -> Void = {}
     ) {
         self.store = store
+        self.side = side
         self.onSizeChange = onSizeChange
         self.onOpenDashboard = onOpenDashboard
     }
 
     var body: some View {
         HStack(alignment: .center, spacing: EdgeDockLayout.panelSpacing) {
-            if let activeSnapshot {
-                EdgeDockDetailView(
-                    snapshot: activeSnapshot,
-                    onOpenDashboard: onOpenDashboard
-                )
-                .frame(width: EdgeDockLayout.detailWidth, height: EdgeDockLayout.panelHeight - 20)
-                .transition(
-                    .asymmetric(
-                        insertion: .move(edge: .trailing).combined(with: .opacity),
-                        removal: .move(edge: .trailing).combined(with: .opacity)
-                    )
-                )
+            if side == .left {
+                railView
+                detailView
+            } else {
+                detailView
+                railView
             }
-
-            EdgeDockRail(
-                snapshots: providerOrder.orderedSnapshots(store.snapshots),
-                activeProvider: activeProvider,
-                onHover: { provider, inside in
-                    guard inside else { return }
-                    activate(provider)
-                },
-                onSelect: activate,
-                onOpenDashboard: onOpenDashboard
-            )
-            .frame(width: EdgeDockLayout.railWidth, height: EdgeDockLayout.panelHeight - 20)
         }
         .padding(EdgeDockLayout.panelPadding)
         .frame(width: panelWidth, height: EdgeDockLayout.panelHeight)
@@ -256,12 +242,47 @@ struct EdgeDockView: View {
     private var surfaceShape: EdgeDockSurfaceShape {
         EdgeDockSurfaceShape(
             cornerRadius: EdgeDockLayout.surfaceCornerRadius,
-            isExpanded: activeSnapshot != nil
+            isExpanded: activeSnapshot != nil,
+            isMirrored: side == .left
         )
     }
 
     private var panelWidth: CGFloat {
         activeSnapshot == nil ? EdgeDockLayout.collapsedWidth : EdgeDockLayout.expandedWidth
+    }
+
+    @ViewBuilder
+    private var detailView: some View {
+        if let activeSnapshot {
+            EdgeDockDetailView(
+                snapshot: activeSnapshot,
+                side: side,
+                onOpenDashboard: onOpenDashboard
+            )
+            .frame(width: EdgeDockLayout.detailWidth, height: EdgeDockLayout.panelHeight - 20)
+            .transition(
+                .asymmetric(
+                    insertion: .move(edge: side == .left ? .leading : .trailing)
+                        .combined(with: .opacity),
+                    removal: .move(edge: side == .left ? .leading : .trailing)
+                        .combined(with: .opacity)
+                )
+            )
+        }
+    }
+
+    private var railView: some View {
+        EdgeDockRail(
+            snapshots: providerOrder.orderedSnapshots(store.snapshots),
+            activeProvider: activeProvider,
+            onHover: { provider, inside in
+                guard inside else { return }
+                activate(provider)
+            },
+            onSelect: activate,
+            onOpenDashboard: onOpenDashboard
+        )
+        .frame(width: EdgeDockLayout.railWidth, height: EdgeDockLayout.panelHeight - 20)
     }
 
     private func activate(_ provider: ProviderID?) {
@@ -444,6 +465,7 @@ private enum EdgeDockActivityPeriod: String, CaseIterable, Identifiable, Equatab
 
 private struct EdgeDockDetailView: View {
     let snapshot: ProviderSnapshot
+    let side: EdgeDockSide
     let onOpenDashboard: () -> Void
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -518,7 +540,7 @@ private struct EdgeDockDetailView: View {
                 seenModelKeys.insert(Self.modelKey(for: usage.name)).inserted
             }
 
-        return Array(sorted.prefix(4))
+        return Array(sorted.prefix(5))
     }
 
     private static func modelKey(for name: String) -> String {
@@ -635,7 +657,7 @@ private struct EdgeDockDetailView: View {
                     Image(systemName: "rectangle.grid.2x2")
                     Text(L10n.text(.openFullOverview, language: languageSettings.language))
                     Spacer()
-                    Image(systemName: "arrow.left")
+                    Image(systemName: side == .left ? "arrow.right" : "arrow.left")
                 }
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white.opacity(0.78))
@@ -1135,13 +1157,27 @@ private enum EdgeDockMotion {
 private struct EdgeDockSurfaceShape: Shape {
     let cornerRadius: CGFloat
     let isExpanded: Bool
+    let isMirrored: Bool
 
     func path(in rect: CGRect) -> Path {
+        let path: Path
         if isExpanded {
-            return expandedPath(in: rect)
+            path = expandedPath(in: rect)
+        } else {
+            path = collapsedPath(in: rect)
         }
 
-        return collapsedPath(in: rect)
+        guard isMirrored else { return path }
+        return path.applying(
+            CGAffineTransform(
+                a: -1,
+                b: 0,
+                c: 0,
+                d: 1,
+                tx: rect.minX + rect.maxX,
+                ty: 0
+            )
+        )
     }
 
     private func expandedPath(in rect: CGRect) -> Path {

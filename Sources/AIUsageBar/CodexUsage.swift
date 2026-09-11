@@ -142,11 +142,21 @@ enum CodexPricing {
     private static let autoReviewID = "codex-auto-review"
     private static let autoReviewCanonicalID = "openai/gpt-5.3-codex"
     private static let autoReviewPrice = Price(input: 1.75, output: 14.0, cacheRead: 0.175)
+    // GPT-6 Astra's official OpenAI API Standard rates, in USD per million
+    // tokens: $10 input, $1 cache read, $12.50 cache write, and $50 output.
+    // Local ~/.tokei pricing files are still loaded afterwards and can
+    // override this built-in value when a user supplies a newer price.
+    private static let astraPrice = Price(input: 10.0, output: 50.0, cacheRead: 1.0, cacheWrite: 12.50)
+    // GPT-5.6 Sol's current official API Standard rates, in USD per million
+    // tokens. OpenAI documents cache writes as 1.25x the uncached input rate.
+    private static let solPrice = Price(input: 4.0, output: 20.0, cacheRead: 0.4, cacheWrite: 5.0)
     // MiniMax's public price page is denominated in CNY. The dashboard's
     // existing cost column is USD-based, so these are the equivalent standard
     // API rates used by the local Tokei price table: $0.30 / $1.20 / $0.06 per
     // million input / output / cache-read tokens for MiniMax M3.
     private static let builtInProviderPrices: [String: Price] = [
+        "openai/gpt-6-astra": astraPrice,
+        "openai/gpt-5.6-sol": solPrice,
         "minimax/minimax-m3": Price(input: 0.30, output: 1.20, cacheRead: 0.06),
         "minimax/minimax-m2.7": Price(input: 0.30, output: 1.20, cacheRead: 0.06),
         "minimax/minimax-m2.7-highspeed": Price(input: 0.60, output: 2.40, cacheRead: 0.06),
@@ -176,7 +186,59 @@ enum CodexPricing {
         "x-preview-f-free": Price(input: 0, output: 0, cacheRead: 0)
     ]
 
-    private static let pricingStore: (models: [String: Price], aliases: [String: String]) = {
+    private struct PricingFileSignature: Equatable {
+        let size: Int64
+        let modifiedAt: Double
+    }
+
+    private struct PricingSourceSignature: Equatable {
+        let bundled: PricingFileSignature?
+        let home: PricingFileSignature?
+        let overrides: PricingFileSignature?
+    }
+
+    private struct PricingCatalog {
+        let models: [String: Price]
+        let aliases: [String: String]
+        let sourceSignature: PricingSourceSignature
+        let version: String
+    }
+
+    // Include the pricing algorithm and long-context threshold in the
+    // version. A future formula change therefore revalues existing cached
+    // events even when the local pricing file itself did not change.
+    private static let pricingRevision = "codex-pricing-v3-long-context-272k"
+    private static let longContextThreshold = 272_000
+    private static let pricingLock = NSLock()
+    private static var pricingCatalog = makePricingCatalog()
+
+    static var currentPriceVersion: String {
+        pricingLock.lock()
+        defer { pricingLock.unlock() }
+        return pricingCatalog.version
+    }
+
+    /// Reload pricing sources when Tokei or the app's bundled catalog changes.
+    /// This is called once per refresh pass, before provider adapters run in
+    /// parallel, so all estimates in that pass share one price version.
+    static func refresh() {
+        let signature = currentPricingSourceSignature()
+        pricingLock.lock()
+        let unchanged = pricingCatalog.sourceSignature == signature
+        pricingLock.unlock()
+        guard !unchanged else { return }
+
+        let rebuilt = makePricingCatalog(sourceSignature: signature)
+        pricingLock.lock()
+        if pricingCatalog.sourceSignature != signature {
+            pricingCatalog = rebuilt
+        }
+        pricingLock.unlock()
+    }
+
+    private static func makePricingCatalog(
+        sourceSignature suppliedSignature: PricingSourceSignature? = nil
+    ) -> PricingCatalog {
         var models: [String: Price] = [
             defaultID: defaultPrice,
             autoReviewCanonicalID: autoReviewPrice
@@ -206,12 +268,10 @@ enum CodexPricing {
             "zai/glm-5.2": "glm-5.2"
         ]
 
-        let homePricing = AppPaths.home
-            .appendingPathComponent(".tokei", isDirectory: true)
-            .appendingPathComponent("pricing.json")
-        let homeOverrides = AppPaths.home
-            .appendingPathComponent(".tokei", isDirectory: true)
-            .appendingPathComponent("pricing_overrides.json")
+        let urls = pricingURLs()
+        let homePricing = urls.home
+        let homeOverrides = urls.overrides
+        let bundledPricing = urls.bundled
 
         func loadModels(from url: URL) {
             guard let root = LocalData.loadJSON(at: url) as? [String: Any] else { return }
@@ -244,10 +304,106 @@ enum CodexPricing {
             loadModels(from: url)
         }
 
+        // Ship the current Tokei snapshot with the app so a fresh install
+        // still has model prices. A user's home table remains authoritative
+        // and is loaded afterwards, preserving the existing override flow.
+        if let bundledPricing {
+            loadModels(from: bundledPricing)
+        }
         loadModels(from: homePricing)
+        // The shared Tokei catalog can lag behind OpenAI's official prices.
+        // Keep verified OpenAI values authoritative over that catalog while
+        // allowing an explicit pricing_overrides.json entry to opt in to a
+        // custom value.
+        models["openai/gpt-6-astra"] = astraPrice
+        models["openai/gpt-5.6-sol"] = solPrice
         loadOverrides(from: homeOverrides)
-        return (models, aliases)
-    }()
+        let sourceSignature = suppliedSignature ?? currentPricingSourceSignature()
+        return PricingCatalog(
+            models: models,
+            aliases: aliases,
+            sourceSignature: sourceSignature,
+            version: makePricingVersion(
+                models: models,
+                aliases: aliases,
+                sourceSignature: sourceSignature
+            )
+        )
+    }
+
+    private static func pricingURLs() -> (bundled: URL?, home: URL, overrides: URL) {
+        let homePricing = AppPaths.home
+            .appendingPathComponent(".tokei", isDirectory: true)
+            .appendingPathComponent("pricing.json")
+        let homeOverrides = AppPaths.home
+            .appendingPathComponent(".tokei", isDirectory: true)
+            .appendingPathComponent("pricing_overrides.json")
+        return (
+            Bundle.main.url(forResource: "pricing", withExtension: "json"),
+            homePricing,
+            homeOverrides
+        )
+    }
+
+    private static func currentPricingSourceSignature() -> PricingSourceSignature {
+        let urls = pricingURLs()
+        return PricingSourceSignature(
+            bundled: fileSignature(at: urls.bundled),
+            home: fileSignature(at: urls.home),
+            overrides: fileSignature(at: urls.overrides)
+        )
+    }
+
+    private static func fileSignature(at url: URL?) -> PricingFileSignature? {
+        guard let url,
+              FileManager.default.fileExists(atPath: url.path),
+              let values = try? url.resourceValues(
+                  forKeys: [.fileSizeKey, .contentModificationDateKey]
+              ),
+              let modifiedAt = values.contentModificationDate else {
+            return nil
+        }
+        return PricingFileSignature(
+            size: Int64(values.fileSize ?? 0),
+            modifiedAt: modifiedAt.timeIntervalSince1970
+        )
+    }
+
+    private static func makePricingVersion(
+        models: [String: Price],
+        aliases: [String: String],
+        sourceSignature: PricingSourceSignature
+    ) -> String {
+        var material = [pricingRevision]
+        for model in models.keys.sorted() {
+            guard let price = models[model] else { continue }
+            material.append(
+                "model|\(model)|\(price.input)|\(price.output)|\(price.cacheRead)|\(price.cacheWrite)"
+            )
+        }
+        for alias in aliases.keys.sorted() {
+            guard let target = aliases[alias] else { continue }
+            material.append("alias|\(alias)|\(target)")
+        }
+        material.append("bundled|\(signatureDescription(sourceSignature.bundled))")
+        material.append("home|\(signatureDescription(sourceSignature.home))")
+        material.append("overrides|\(signatureDescription(sourceSignature.overrides))")
+        return stableFingerprint(material.joined(separator: "\n"))
+    }
+
+    private static func signatureDescription(_ signature: PricingFileSignature?) -> String {
+        guard let signature else { return "missing" }
+        return "\(signature.size):\(signature.modifiedAt)"
+    }
+
+    private static func stableFingerprint(_ value: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
 
     static func displayName(_ rawModel: String?) -> String {
         guard let rawModel else { return "未知" }
@@ -277,17 +433,23 @@ enum CodexPricing {
         model: String,
         inputTokens: Int,
         cachedInputTokens: Int,
-        outputTokens: Int
+        outputTokens: Int,
+        cacheWriteInputTokens: Int = 0
     ) -> Double {
         let price = resolvedPrice(for: model)
-        let highContext = inputTokens > 272_000
+        let totalInput = max(inputTokens, 0)
+        let cachedInput = min(max(cachedInputTokens, 0), totalInput)
+        let cacheWrite = min(max(cacheWriteInputTokens, 0), max(totalInput - cachedInput, 0))
+        let uncachedInput = max(totalInput - cachedInput - cacheWrite, 0)
+        let highContext = totalInput > longContextThreshold
         let inputPrice = price.input * (highContext ? 2 : 1)
         let cachePrice = price.cacheRead * (highContext ? 2 : 1)
+        let cacheWritePrice = price.cacheWrite * (highContext ? 2 : 1)
         let outputPrice = price.output * (highContext ? 1.5 : 1)
-        let uncachedInput = max(inputTokens - cachedInputTokens, 0)
         return Double(uncachedInput) / 1_000_000 * inputPrice
-            + Double(cachedInputTokens) / 1_000_000 * cachePrice
-            + Double(outputTokens) / 1_000_000 * outputPrice
+            + Double(cachedInput) / 1_000_000 * cachePrice
+            + Double(cacheWrite) / 1_000_000 * cacheWritePrice
+            + Double(max(outputTokens, 0)) / 1_000_000 * outputPrice
     }
 
     /// Estimate a generic provider's token cost from the same local price
@@ -313,20 +475,40 @@ enum CodexPricing {
     }
 
     private static func resolvedPrice(for rawModel: String) -> Price {
-        if let price = knownPrice(for: rawModel) { return price }
+        pricingLock.lock()
+        let catalog = pricingCatalog
+        pricingLock.unlock()
+        return resolvedPrice(for: rawModel, in: catalog)
+    }
+
+    private static func resolvedPrice(
+        for rawModel: String,
+        in catalog: PricingCatalog
+    ) -> Price {
+        if let price = knownPrice(for: rawModel, in: catalog) { return price }
 
         // Tokei falls back conservatively to the current GPT-5 family price
         // when a Codex model is not present in the local price table.
-        return pricingStore.models[defaultID] ?? defaultPrice
+        return catalog.models[defaultID] ?? defaultPrice
     }
 
     private static func knownPrice(for rawModel: String) -> Price? {
+        pricingLock.lock()
+        let catalog = pricingCatalog
+        pricingLock.unlock()
+        return knownPrice(for: rawModel, in: catalog)
+    }
+
+    private static func knownPrice(
+        for rawModel: String,
+        in catalog: PricingCatalog
+    ) -> Price? {
         let normalized = normalize(rawModel)
-        if let alias = pricingStore.aliases[rawModel.lowercased()],
-           let price = pricingStore.models[alias] {
+        if let alias = catalog.aliases[rawModel.lowercased()],
+           let price = catalog.models[alias] {
             return price
         }
-        return pricingStore.models[normalized]
+        return catalog.models[normalized]
     }
 
     private static func isMiniMaxM3(_ rawModel: String) -> Bool {
@@ -370,10 +552,12 @@ enum CodexUsageScanner {
     private struct EventKey: Hashable {
         let totalInput: Int
         let totalCached: Int
+        let totalCacheWrite: Int
         let totalOutput: Int
         let totalReasoning: Int
         let input: Int
         let cached: Int
+        let cacheWrite: Int
         let output: Int
         let reasoning: Int
     }
@@ -383,24 +567,29 @@ enum CodexUsageScanner {
         let dateKey: String
         let totalInput: Int?
         let totalCached: Int?
+        let totalCacheWrite: Int?
         let totalOutput: Int?
         let totalReasoning: Int?
         let input: Int
         let cached: Int
+        let cacheWrite: Int
         let output: Int
         let reasoning: Int
         let cost: Double
         let model: String
+        let priceVersion: String
 
         var totalKey: EventKey? {
             guard let totalInput, let totalCached, let totalOutput, let totalReasoning else { return nil }
             return EventKey(
                 totalInput: totalInput,
                 totalCached: totalCached,
+                totalCacheWrite: totalCacheWrite ?? 0,
                 totalOutput: totalOutput,
                 totalReasoning: totalReasoning,
                 input: input,
                 cached: cached,
+                cacheWrite: cacheWrite,
                 output: output,
                 reasoning: reasoning
             )
@@ -410,10 +599,36 @@ enum CodexUsageScanner {
             TokenBreakdown(
                 input: Double(input),
                 output: Double(output),
-                total: Double(input + cached + output),
+                total: Double(input + cached + cacheWrite + output),
                 cacheRead: Double(cached),
-                cacheWrite: 0,
+                cacheWrite: Double(cacheWrite),
                 reasoning: Double(reasoning)
+            )
+        }
+
+        func repriced(using version: String) -> CodexEvent {
+            CodexEvent(
+                timestamp: timestamp,
+                dateKey: dateKey,
+                totalInput: totalInput,
+                totalCached: totalCached,
+                totalCacheWrite: totalCacheWrite,
+                totalOutput: totalOutput,
+                totalReasoning: totalReasoning,
+                input: input,
+                cached: cached,
+                cacheWrite: cacheWrite,
+                output: output,
+                reasoning: reasoning,
+                cost: CodexPricing.cost(
+                    model: model,
+                    inputTokens: input + cached + cacheWrite,
+                    cachedInputTokens: cached,
+                    outputTokens: output,
+                    cacheWriteInputTokens: cacheWrite
+                ),
+                model: model,
+                priceVersion: version
             )
         }
     }
@@ -427,46 +642,107 @@ enum CodexUsageScanner {
         let latestQuota: CodexQuotaSnapshot?
     }
 
+    private struct LoadedCache {
+        let files: [String: FileEntry]
+        let pricingVersion: String
+    }
+
+    private struct FileSignature: Codable, Equatable {
+        let size: Int64
+        let modifiedAt: Double
+    }
+
     private struct ScanCache: Codable {
         let version: Int
+        let pricingVersion: String
         let files: [String: FileEntry]
     }
 
-    private static let cacheVersion = 1
+    // This small sidecar lets the common refresh path avoid decoding the
+    // complete event cache. It is invalidated by file metadata, pricing, or
+    // calendar-day changes, so cached summaries never hide a changed log.
+    private struct SummaryCache: Codable {
+        let version: Int
+        let pricingVersion: String
+        let contextKey: String
+        let files: [String: FileSignature]
+        let summary: LocalUsageSummary
+        let latestQuota: CodexQuotaSnapshot?
+        let recognizedEventCount: Int
+    }
+
+    // Version 4 rebuilds the event cache after fixing incremental overlap
+    // matching. Older entries may contain the same token_count event more
+    // than once when the pricing catalog changed between refreshes.
+    private static let cacheVersion = 4
     private static let cacheURL = AppPaths.appSupport.appendingPathComponent("codex-scan-cache.json")
+    private static let summaryCacheVersion = 2
+    private static let summaryCacheURL = AppPaths.appSupport.appendingPathComponent("codex-summary-cache.json")
     private static let incrementalOverlapBytes: Int64 = 2 * 1024 * 1024
     private static let tokenMarker = Data("\"token_count\"".utf8)
     private static let modelMarker = Data("\"turn_context\"".utf8)
     private static let sessionMarker = Data("\"session_meta\"".utf8)
 
     static func scan() -> CodexUsageScanResult {
+        CodexPricing.refresh()
+        let pricingVersion = CodexPricing.currentPriceVersion
         let files = rolloutFiles()
-        let previous = loadCache()
+        let fileSignatures = signatures(for: files)
+        let contextKey = summaryContextKey()
+
+        // Most refreshes only need to check file metadata. Reuse the already
+        // aggregated result instead of decoding and replaying every event.
+        if let cachedSummary = loadSummaryCache(),
+           cachedSummary.version == summaryCacheVersion,
+           cachedSummary.pricingVersion == pricingVersion,
+           cachedSummary.contextKey == contextKey,
+           cachedSummary.files == fileSignatures {
+            return CodexUsageScanResult(
+                summary: cachedSummary.summary,
+                latestQuota: cachedSummary.latestQuota,
+                hasRolloutFiles: !files.isEmpty,
+                recognizedEventCount: cachedSummary.recognizedEventCount
+            )
+        }
+
+        let loadedCache = loadCache()
+        let previous = loadedCache?.files ?? [:]
+        let pricingChanged = loadedCache?.pricingVersion != pricingVersion
+        let filesChanged = loadedCache == nil
+            || previous.count != fileSignatures.count
+            || fileSignatures.contains { path, signature in
+                guard let cached = previous[path] else { return true }
+                return cached.size != signature.size || cached.modifiedAt != signature.modifiedAt
+            }
+        let cacheNeedsSave = filesChanged || pricingChanged
         var current: [String: FileEntry] = [:]
 
         for url in files {
             let path = url.path
-            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            let size = Int64(values?.fileSize ?? 0)
-            let modifiedAt = values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            let signature = fileSignatures[path] ?? FileSignature(size: 0, modifiedAt: 0)
+            let size = signature.size
+            let modifiedAt = signature.modifiedAt
 
             if let cached = previous[path], cached.size == size, cached.modifiedAt == modifiedAt {
-                current[path] = cached
+                current[path] = pricingChanged
+                    ? reprice(cached, using: pricingVersion)
+                    : cached
             } else if let cached = previous[path],
                       cached.size > 0,
                       size > cached.size {
-                current[path] = parseAppendedFile(
+                let appended = parseAppendedFile(
                     url: url,
                     previous: cached,
                     size: size,
                     modifiedAt: modifiedAt
                 )
+                current[path] = pricingChanged
+                    ? reprice(appended, using: pricingVersion)
+                    : appended
             } else {
                 current[path] = parseFile(url: url, size: size, modifiedAt: modifiedAt)
             }
         }
-
-        saveCache(ScanCache(version: cacheVersion, files: current))
 
         let canonical = canonicalEntries(current)
         var summary = LocalUsageSummary()
@@ -492,6 +768,27 @@ enum CodexUsageScanner {
                 latestQuota = quota
             }
         }
+
+        if cacheNeedsSave || loadedCache == nil {
+            saveCache(
+                ScanCache(
+                    version: cacheVersion,
+                    pricingVersion: pricingVersion,
+                    files: current
+                )
+            )
+        }
+        saveSummaryCache(
+            SummaryCache(
+                version: summaryCacheVersion,
+                pricingVersion: pricingVersion,
+                contextKey: contextKey,
+                files: fileSignatures,
+                summary: summary,
+                latestQuota: latestQuota,
+                recognizedEventCount: recognizedEventCount
+            )
+        )
 
         return CodexUsageScanResult(
             summary: summary,
@@ -549,11 +846,59 @@ enum CodexUsageScanner {
         return results.sorted { $0.path < $1.path }
     }
 
-    private static func loadCache() -> [String: FileEntry] {
+    private static func signatures(for urls: [URL]) -> [String: FileSignature] {
+        var result: [String: FileSignature] = [:]
+        for url in urls {
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            result[url.path] = FileSignature(
+                size: Int64(values?.fileSize ?? 0),
+                modifiedAt: values?.contentModificationDate?.timeIntervalSince1970 ?? 0
+            )
+        }
+        return result
+    }
+
+    private static func summaryContextKey() -> String {
+        let calendar = Calendar.autoupdatingCurrent
+        let now = Date()
+        let components = calendar.dateComponents([.year, .month, .day], from: now)
+        return [
+            calendar.timeZone.identifier,
+            String(calendar.timeZone.secondsFromGMT(for: now)),
+            String(components.year ?? 0),
+            String(components.month ?? 0),
+            String(components.day ?? 0)
+        ].joined(separator: "|")
+    }
+
+    private static func loadCache() -> LoadedCache? {
         guard let data = try? Data(contentsOf: cacheURL),
               let cache = try? JSONDecoder().decode(ScanCache.self, from: data),
-              cache.version == cacheVersion else { return [:] }
-        return cache.files
+              cache.version == cacheVersion else { return nil }
+        return LoadedCache(files: cache.files, pricingVersion: cache.pricingVersion)
+    }
+
+    private static func loadSummaryCache() -> SummaryCache? {
+        guard let data = try? Data(contentsOf: summaryCacheURL) else { return nil }
+        return try? JSONDecoder().decode(SummaryCache.self, from: data)
+    }
+
+    private static func reprice(_ entry: FileEntry, using version: String) -> FileEntry {
+        var didChange = false
+        let events = entry.events.map { event -> CodexEvent in
+            guard event.priceVersion != version else { return event }
+            didChange = true
+            return event.repriced(using: version)
+        }
+        guard didChange else { return entry }
+        return FileEntry(
+            size: entry.size,
+            modifiedAt: entry.modifiedAt,
+            sessionID: entry.sessionID,
+            forkedFromID: entry.forkedFromID,
+            events: events,
+            latestQuota: entry.latestQuota
+        )
     }
 
     private static func saveCache(_ cache: ScanCache) {
@@ -574,6 +919,27 @@ enum CodexUsageScanner {
         } catch {
             // Usage collection should continue even if the optional cache
             // cannot be written in a restricted environment.
+        }
+    }
+
+    private static func saveSummaryCache(_ cache: SummaryCache) {
+        do {
+            try FileManager.default.createDirectory(
+                at: AppPaths.appSupport,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(cache)
+            try data.write(to: summaryCacheURL, options: .atomic)
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: summaryCacheURL.path
+            )
+        } catch {
+            // The sidecar is an optimization; the event cache remains the
+            // authoritative fallback when it cannot be written.
         }
     }
 
@@ -634,7 +1000,10 @@ enum CodexUsageScanner {
             }
 
             let rawInput = CodexUsageScanner.integer(last["input_tokens"])
-            let cached = CodexUsageScanner.integer(last["cached_input_tokens"])
+            let rawCached = CodexUsageScanner.integer(last["cached_input_tokens"])
+            let rawCacheWrite = CodexUsageScanner.integer(last["cache_write_input_tokens"])
+            let cached = min(rawCached, rawInput)
+            let cacheWrite = min(rawCacheWrite, max(rawInput - cached, 0))
             let output = CodexUsageScanner.integer(last["output_tokens"])
             let reasoning = CodexUsageScanner.integer(last["reasoning_output_tokens"])
             let total = info["total_token_usage"] as? [String: Any]
@@ -643,10 +1012,12 @@ enum CodexUsageScanner {
                 totalKey = EventKey(
                     totalInput: CodexUsageScanner.integer(total["input_tokens"]),
                     totalCached: CodexUsageScanner.integer(total["cached_input_tokens"]),
+                    totalCacheWrite: CodexUsageScanner.integer(total["cache_write_input_tokens"]),
                     totalOutput: CodexUsageScanner.integer(total["output_tokens"]),
                     totalReasoning: CodexUsageScanner.integer(total["reasoning_output_tokens"]),
                     input: rawInput,
                     cached: cached,
+                    cacheWrite: cacheWrite,
                     output: output,
                     reasoning: reasoning
                 )
@@ -665,19 +1036,23 @@ enum CodexUsageScanner {
                 dateKey: CodexUsageScanner.dateKey(timestamp),
                 totalInput: total?["input_tokens"].flatMap(CodexUsageScanner.integer),
                 totalCached: total?["cached_input_tokens"].flatMap(CodexUsageScanner.integer),
+                totalCacheWrite: total?["cache_write_input_tokens"].flatMap(CodexUsageScanner.integer),
                 totalOutput: total?["output_tokens"].flatMap(CodexUsageScanner.integer),
                 totalReasoning: total?["reasoning_output_tokens"].flatMap(CodexUsageScanner.integer),
-                input: max(rawInput - cached, 0),
+                input: max(rawInput - cached - cacheWrite, 0),
                 cached: cached,
+                cacheWrite: cacheWrite,
                 output: output,
                 reasoning: reasoning,
                 cost: CodexPricing.cost(
                     model: model,
                     inputTokens: rawInput,
                     cachedInputTokens: cached,
-                    outputTokens: output
+                    outputTokens: output,
+                    cacheWriteInputTokens: cacheWrite
                 ),
-                model: model
+                model: model,
+                priceVersion: CodexPricing.currentPriceVersion
             ))
         }
 
@@ -745,7 +1120,10 @@ enum CodexUsageScanner {
         for count in stride(from: maximum, through: 1, by: -1) {
             var matches = true
             for index in 0..<count {
-                if existing[existing.count - count + index] != incoming[index] {
+                if !sameLogicalEvent(
+                    existing[existing.count - count + index],
+                    incoming[index]
+                ) {
                     matches = false
                     break
                 }
@@ -753,6 +1131,29 @@ enum CodexUsageScanner {
             if matches { return count }
         }
         return 0
+    }
+
+    /// `parseAppendedFile` may read the overlap with a different pricing
+    /// catalog than the cached prefix. Cost and priceVersion are presentation
+    /// values, so they must not prevent the same cumulative token event from
+    /// matching across refreshes.
+    private static func sameLogicalEvent(_ lhs: CodexEvent, _ rhs: CodexEvent) -> Bool {
+        if let lhsKey = lhs.totalKey, let rhsKey = rhs.totalKey {
+            return lhsKey == rhsKey
+        }
+        return lhs.timestamp == rhs.timestamp
+            && lhs.dateKey == rhs.dateKey
+            && lhs.totalInput == rhs.totalInput
+            && lhs.totalCached == rhs.totalCached
+            && lhs.totalCacheWrite == rhs.totalCacheWrite
+            && lhs.totalOutput == rhs.totalOutput
+            && lhs.totalReasoning == rhs.totalReasoning
+            && lhs.input == rhs.input
+            && lhs.cached == rhs.cached
+            && lhs.cacheWrite == rhs.cacheWrite
+            && lhs.output == rhs.output
+            && lhs.reasoning == rhs.reasoning
+            && lhs.model == rhs.model
     }
 
     private static func canonicalEntries(_ entries: [String: FileEntry]) -> [String: FileEntry] {

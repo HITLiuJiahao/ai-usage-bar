@@ -14,11 +14,17 @@ struct QwenWorkScanResult {
     }
 }
 
+private enum QwenWorkEventSource: String, Codable {
+    case assistantTranscript
+    case responseCompleted
+}
+
 private struct QwenWorkEvent {
     let key: String
     let timestamp: Date
     let sessionID: String
     let model: String
+    let source: QwenWorkEventSource
     let tokens: TokenBreakdown?
     let cost: Double
 }
@@ -28,6 +34,7 @@ private struct QwenWorkCachedEvent: Codable {
     let timestamp: Date
     let sessionID: String
     let model: String
+    let source: QwenWorkEventSource
     let input: Double
     let output: Double
     let cacheRead: Double
@@ -40,6 +47,7 @@ private struct QwenWorkCachedEvent: Codable {
         self.timestamp = event.timestamp
         self.sessionID = event.sessionID
         self.model = event.model
+        self.source = event.source
         self.input = event.tokens?.input ?? 0
         self.output = event.tokens?.output ?? 0
         self.cacheRead = event.tokens?.cacheRead ?? 0
@@ -54,6 +62,7 @@ private struct QwenWorkCachedEvent: Codable {
             timestamp: timestamp,
             sessionID: sessionID,
             model: model,
+            source: source,
             tokens: hasTokens
                 ? TokenBreakdown(
                     input: input,
@@ -69,10 +78,12 @@ private struct QwenWorkCachedEvent: Codable {
 }
 
 private struct QwenWorkFileEntry: Codable {
+    let sessionID: String
     let size: Int64
     let modifiedAt: Double
     let events: [QwenWorkCachedEvent]
     let errorCount: Int
+    let isMaintenance: Bool
 }
 
 private struct QwenWorkScanCache: Codable {
@@ -81,11 +92,12 @@ private struct QwenWorkScanCache: Codable {
 }
 
 enum QwenWorkUsageScanner {
-    private static let cacheVersion = 3
+    private static let cacheVersion = 4
     private static let cacheURL = AppPaths.appSupport.appendingPathComponent("qwenwork-scan-cache.json")
     private static let responseMarker = Data("\"model.response.completed\"".utf8)
     private static let failureMarker = Data("\"model.request.attempt_failed\"".utf8)
     private static let configMarker = Data("\"session.config.loaded\"".utf8)
+    private static let humanInputMarker = Data("\"humanInput\"".utf8)
     private static let assistantMarker = Data("\"assistant\"".utf8)
     private static let runtimeConfigMarker = Data("\"runtime-config\"".utf8)
     private static let errorMarker = Data("\"error\"".utf8)
@@ -120,12 +132,18 @@ enum QwenWorkUsageScanner {
             saveCache(QwenWorkScanCache(version: cacheVersion, files: current))
         }
 
+        let maintenanceSessionIDs = Set(
+            current.values
+                .filter(\.isMaintenance)
+                .map(\.sessionID)
+        )
         var uniqueEvents: [String: QwenWorkEvent] = [:]
         var errorCount = 0
         for entry in current.values {
             errorCount += entry.errorCount
             for cachedEvent in entry.events {
                 let event = cachedEvent.event
+                guard !maintenanceSessionIDs.contains(event.sessionID) else { continue }
                 if let existing = uniqueEvents[event.key] {
                     if eventScore(event) > eventScore(existing) {
                         uniqueEvents[event.key] = event
@@ -136,7 +154,22 @@ enum QwenWorkUsageScanner {
             }
         }
 
-        let events = uniqueEvents.values.sorted { $0.timestamp < $1.timestamp }
+        let allEvents = uniqueEvents.values.sorted { $0.timestamp < $1.timestamp }
+        // QwenWork mirrors one model turn into two local streams:
+        // `projects` contains assistant transcript messages, while
+        // `logs/sessions` contains the authoritative
+        // `model.response.completed` record. Prefer the latter whenever a
+        // session has it, otherwise a session with both sources is counted
+        // twice (once per mirror).
+        let responseSessions = Set(
+            allEvents
+                .filter { $0.source == .responseCompleted }
+                .map(\.sessionID)
+        )
+        let events = allEvents.filter { event in
+            event.source == .responseCompleted
+                || !responseSessions.contains(event.sessionID)
+        }
         var summary = LocalUsageSummary()
         var tokenResponseCount = 0
         for event in events {
@@ -216,9 +249,11 @@ enum QwenWorkUsageScanner {
     private static func parseFile(at url: URL, size: Int64, modifiedAt: Double) -> QwenWorkFileEntry {
         let fileSessionID = sessionID(for: url)
         let fallbackDate = Date(timeIntervalSince1970: modifiedAt)
+        var detectedSessionID = fileSessionID
         var currentModel: String?
         var events: [QwenWorkCachedEvent] = []
         var errorCount = 0
+        var isMaintenance = false
         var lineNumber = 0
 
         forEachLine(at: url) { line in
@@ -226,6 +261,7 @@ enum QwenWorkUsageScanner {
             guard line.range(of: responseMarker) != nil
                 || line.range(of: failureMarker) != nil
                 || line.range(of: configMarker) != nil
+                || line.range(of: humanInputMarker) != nil
                 || line.range(of: assistantMarker) != nil
                 || line.range(of: runtimeConfigMarker) != nil
                 || line.range(of: errorMarker) != nil else { return }
@@ -233,6 +269,13 @@ enum QwenWorkUsageScanner {
                   let type = LocalData.string(object["type"]) else { return }
 
             let data = object["data"] as? [String: Any] ?? [:]
+            if type == "user" {
+                detectedSessionID = sessionID(in: object, fallback: detectedSessionID)
+                if isMemoryMaintenancePrompt(object) {
+                    isMaintenance = true
+                }
+                return
+            }
             if type == "session.config.loaded" {
                 currentModel = LocalData.string(data["model"]) ?? currentModel
                 return
@@ -271,6 +314,7 @@ enum QwenWorkUsageScanner {
                 ?? currentModel
                 ?? "qmodel_latest"
             let eventSessionID = sessionID(in: object, fallback: fileSessionID)
+            detectedSessionID = eventSessionID
             let requestID = LocalData.string(object["request_id"])
             let requestIndex = LocalData.string(data["request_index"])
             let turnID = LocalData.string(object["turn_id"])
@@ -297,6 +341,7 @@ enum QwenWorkUsageScanner {
                 timestamp: timestamp,
                 sessionID: eventSessionID,
                 model: model,
+                source: isLegacyResponse ? .responseCompleted : .assistantTranscript,
                 tokens: tokens,
                 cost: 0
             )
@@ -304,11 +349,24 @@ enum QwenWorkUsageScanner {
         }
 
         return QwenWorkFileEntry(
+            sessionID: detectedSessionID,
             size: size,
             modifiedAt: modifiedAt,
             events: events,
-            errorCount: errorCount
+            errorCount: errorCount,
+            isMaintenance: isMaintenance
         )
+    }
+
+    private static func isMemoryMaintenancePrompt(_ object: [String: Any]) -> Bool {
+        guard let humanInput = object["humanInput"] as? [String: Any],
+              let text = humanInput["text"] as? String,
+              let firstLine = text.split(whereSeparator: \.isNewline).first else {
+            return false
+        }
+        return firstLine
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare("Target file this round: MEMORY.md") == .orderedSame
     }
 
     /// QwenWork transcripts sometimes carry usageMetadata, but many releases
@@ -592,7 +650,7 @@ enum QwenWorkUsageMetrics {
                     unit: "次",
                     source: .local,
                     resetAt: nil,
-                    note: "按去重后的 assistant 响应记录计数，兼容旧版 response 事件"
+                    note: "按去重后的模型响应记录计数，兼容旧版 response 事件"
                 ))
             }
             if !bucket.sessions.isEmpty {

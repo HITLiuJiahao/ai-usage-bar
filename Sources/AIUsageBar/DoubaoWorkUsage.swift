@@ -2,6 +2,7 @@ import Foundation
 
 struct DoubaoWorkScanResult {
     let summary: LocalUsageSummary
+    let modelUsages: [ModelUsage]
     let responseCount: Int
     let hasLogFiles: Bool
     let countSource: DoubaoWorkCountSource
@@ -10,7 +11,8 @@ struct DoubaoWorkScanResult {
 enum DoubaoWorkCountSource {
     case chatUsage
     case taskLedger
-    case modelEvents
+    case networkRequests
+    case combined
     case none
 }
 
@@ -23,6 +25,7 @@ private struct DoubaoWorkRequest: Codable {
     let requestSize: Double?
     let responseSize: Double?
     let durationMilliseconds: Double?
+    let model: String?
 }
 
 private struct DoubaoWorkFile {
@@ -45,11 +48,17 @@ private struct DoubaoWorkTask: Codable, Equatable {
 private struct DoubaoWorkModelEvent: Codable, Equatable {
     let id: String
     let date: Date
+    let model: String?
 }
 
 private struct DoubaoWorkChatScan {
     let modernEvents: [DoubaoWorkModelEvent]
     let legacyEvents: [DoubaoWorkModelEvent]
+}
+
+private struct DoubaoWorkUsageDay {
+    let date: Date
+    let count: Int
 }
 
 private struct DoubaoWorkScanCache: Codable {
@@ -75,14 +84,16 @@ private struct DoubaoWorkScanCache: Codable {
 }
 
 enum DoubaoWorkUsageScanner {
-    // Version 6 counts the local chat record's ext_window_usage entries. A
-    // single Work-mode task can make several model calls, so task/message IDs
-    // are only a fallback and must not be used as the primary request count.
-    // The long-lived local-tool SSE channel is not a usage counter: it
-    // reconnects periodically while the app is idle. The cache also stores
-    // requests from retired log files and uses request start times for daily
-    // buckets.
-    private static let cacheVersion = 6
+    // Version 7 also keeps a best-effort model name when the local record
+    // exposes model/model_name/model_id (or an equivalent engine field).
+    // Version 6 counts the local chat record's ext_window_usage entries when
+    // available, while also retaining the Tea/SDK completion ledger. A single
+    // Work-mode task can make several model calls, so task/message IDs are
+    // only a fallback and must not be used as the primary request count. The
+    // long-lived local-tool SSE channel is not a usage counter: it reconnects
+    // periodically while the app is idle. The cache also stores requests from
+    // retired log files and uses request start times for daily buckets.
+    private static let cacheVersion = 7
     private static let cacheOverlapBytes: Int64 = 2 * 1024 * 1024
     private static let completionPaths: Set<String> = [
         "/chat/completion",
@@ -189,16 +200,34 @@ enum DoubaoWorkUsageScanner {
             ))
         }
 
-        if !modelEvents.isEmpty {
+        let successfulRequests = allRequests.filter { isSuccessful($0.statusCode) }
+        if !modelEvents.isEmpty || !successfulRequests.isEmpty {
+            let usageDays = mergedUsageDays(
+                modelEvents: modelEvents,
+                requests: successfulRequests
+            )
             var summary = LocalUsageSummary()
-            for event in modelEvents {
-                summary.add(date: event.date, tokens: nil, requests: 1)
+            for usageDay in usageDays {
+                summary.add(
+                    date: usageDay.date,
+                    tokens: nil,
+                    requests: Double(usageDay.count)
+                )
             }
+            let modelSummary = modelUsageSummary(
+                modelEvents: modelEvents,
+                requests: successfulRequests
+            )
             return DoubaoWorkScanResult(
                 summary: summary,
-                responseCount: modelEvents.count,
+                modelUsages: UsageMetrics.modelUsages(summary: modelSummary),
+                responseCount: usageDays.reduce(0) { $0 + $1.count },
                 hasLogFiles: !files.isEmpty || !chatFiles.isEmpty,
-                countSource: .chatUsage
+                countSource: modelEvents.isEmpty
+                    ? .networkRequests
+                    : successfulRequests.isEmpty
+                        ? .chatUsage
+                        : .combined
             )
         }
 
@@ -209,30 +238,98 @@ enum DoubaoWorkUsageScanner {
             }
             return DoubaoWorkScanResult(
                 summary: summary,
+                modelUsages: [],
                 responseCount: tasks.count,
                 hasLogFiles: !files.isEmpty || !chatFiles.isEmpty,
                 countSource: .taskLedger
             )
         }
 
+        return DoubaoWorkScanResult(
+            summary: LocalUsageSummary(),
+            modelUsages: [],
+            responseCount: 0,
+            hasLogFiles: !files.isEmpty || !chatFiles.isEmpty,
+            countSource: .none
+        )
+    }
+
+    private static func modelUsageSummary(
+        modelEvents: [DoubaoWorkModelEvent],
+        requests: [DoubaoWorkRequest]
+    ) -> LocalUsageSummary {
         var summary = LocalUsageSummary()
-        var seen: Set<String> = []
-        var responseCount = 0
-        for request in (activeRequests + archivedRequests)
-            .sorted(by: { $0.date < $1.date }) {
-            guard isSuccessful(request.statusCode) else { continue }
-            let key = deduplicationKey(for: request)
-            guard seen.insert(key).inserted else { continue }
-            summary.add(date: request.date, tokens: nil, requests: 1)
-            responseCount += 1
+        let knownEvents = modelEvents.filter { $0.model != nil }
+
+        // Chat usage entries are the more direct signal: one entry represents
+        // one model call, while the network ledger can contain a mirror of the
+        // same request. Use the ledger only when chat records did not expose a
+        // model at all.
+        if !knownEvents.isEmpty {
+            for event in knownEvents {
+                summary.add(
+                    date: event.date,
+                    tokens: nil,
+                    requests: 1,
+                    model: event.model
+                )
+            }
+        } else {
+            for request in requests {
+                guard let model = request.model else { continue }
+                summary.add(
+                    date: request.date,
+                    tokens: nil,
+                    requests: 1,
+                    model: model
+                )
+            }
+        }
+        return summary
+    }
+
+    private static func mergedUsageDays(
+        modelEvents: [DoubaoWorkModelEvent],
+        requests: [DoubaoWorkRequest],
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> [DoubaoWorkUsageDay] {
+        struct DayCounts {
+            var modelEvents = 0
+            var requests = 0
+            var latestDate: Date?
         }
 
-        return DoubaoWorkScanResult(
-            summary: summary,
-            responseCount: responseCount,
-            hasLogFiles: !files.isEmpty || !chatFiles.isEmpty,
-            countSource: responseCount > 0 ? .modelEvents : .none
-        )
+        var counts: [Date: DayCounts] = [:]
+        let upperBound = Date().addingTimeInterval(60)
+
+        for event in modelEvents where event.date <= upperBound {
+            let day = calendar.startOfDay(for: event.date)
+            var value = counts[day] ?? DayCounts()
+            value.modelEvents += 1
+            if value.latestDate == nil || event.date > value.latestDate! {
+                value.latestDate = event.date
+            }
+            counts[day] = value
+        }
+
+        for request in requests where request.date <= upperBound {
+            let day = calendar.startOfDay(for: request.date)
+            var value = counts[day] ?? DayCounts()
+            value.requests += 1
+            if value.latestDate == nil || request.date > value.latestDate! {
+                value.latestDate = request.date
+            }
+            counts[day] = value
+        }
+
+        return counts.map { day, value in
+            DoubaoWorkUsageDay(
+                date: value.latestDate ?? day,
+                count: max(value.modelEvents, value.requests)
+            )
+        }
+        .filter { $0.count > 0 }
+        .sorted { $0.date < $1.date }
     }
 
     private static func logFiles() -> [DoubaoWorkFile] {
@@ -322,11 +419,239 @@ enum DoubaoWorkUsageScanner {
             let nextPosition = positions.dropFirst(ordinal + 1).first ?? bytes.count
             let end = min(nextPosition, position + 64 * 1024)
             let identity = stableIdentity(in: bytes, range: position..<end)
+            let payloadStart = min(position + marker.count, end)
+            let model = modelName(
+                in: bytes,
+                range: payloadStart..<end
+            ) ?? modelName(
+                in: bytes,
+                range: max(position - 8 * 1024, 0)..<end
+            )
             return DoubaoWorkModelEvent(
                 id: "chat-usage-\(identity)",
-                date: chatDay(in: bytes, around: position) ?? fallbackDate
+                date: chatDay(in: bytes, around: position) ?? fallbackDate,
+                model: model
             )
         }
+    }
+
+    private static let modelFieldNames = [
+        "model_name", "modelName",
+        "model_id", "modelId",
+        "model_slug", "modelSlug",
+        "model_alias", "modelAlias",
+        "model_type", "modelType",
+        "model_key", "modelKey",
+        "model", "engine"
+    ]
+
+    private static func modelName(
+        from value: Any?
+    ) -> String? {
+        guard let value else { return nil }
+        if let model = normalizedModelName(LocalData.modelName(in: value)) {
+            return model
+        }
+
+        // Some clients serialize the selection as {"model":{"id":...}}
+        // instead of a scalar model field.
+        guard let modelObject = LocalData.firstObject(
+            in: value,
+            keys: ["model", "modeldata", "modelinfo", "engine"]
+        ) else {
+            return nil
+        }
+        return normalizedModelName(LocalData.firstString(
+            in: modelObject,
+            keys: [
+                "name", "id", "slug", "alias", "model", "modelname", "modelid"
+            ]
+        ))
+    }
+
+    private static func modelName(
+        in bytes: [UInt8],
+        range: Range<Int>
+    ) -> String? {
+        guard range.lowerBound >= 0,
+              range.upperBound <= bytes.count,
+              range.lowerBound < range.upperBound else {
+            return nil
+        }
+
+        // Prefer ordinary JSON because it preserves escaping and field
+        // boundaries. Chat IndexedDB values are often structured-clone data,
+        // so the printable-string fallback below handles that representation.
+        for field in modelFieldNames {
+            if let value = jsonStringValue(
+                for: field,
+                in: bytes,
+                range: range
+            ), let model = normalizedModelName(value) {
+                return model
+            }
+        }
+
+        for field in modelFieldNames {
+            let fieldBytes = Array(field.utf8)
+            var cursor = range.lowerBound
+            while let position = find(fieldBytes, in: bytes, from: cursor),
+                  position + fieldBytes.count <= range.upperBound {
+                let after = position + fieldBytes.count
+                let beforeByte = position > range.lowerBound ? bytes[position - 1] : nil
+                let afterByte = after < range.upperBound ? bytes[after] : nil
+                guard !isIdentifierByte(beforeByte), !isIdentifierByte(afterByte) else {
+                    cursor = after
+                    continue
+                }
+
+                let searchEnd = min(after + 512, range.upperBound)
+                if let value = printableValue(
+                    after: after,
+                    in: bytes,
+                    upperBound: searchEnd
+                ), let model = normalizedModelName(value) {
+                    return model
+                }
+                cursor = after
+            }
+        }
+        return nil
+    }
+
+    private static func jsonStringValue(
+        for field: String,
+        in bytes: [UInt8],
+        range: Range<Int>
+    ) -> String? {
+        let quotedField = Array("\"\(field)\"".utf8)
+        var cursor = range.lowerBound
+        while let position = find(quotedField, in: bytes, from: cursor),
+              position + quotedField.count <= range.upperBound {
+            var valueStart = position + quotedField.count
+            while valueStart < range.upperBound, isJSONWhitespace(bytes[valueStart]) {
+                valueStart += 1
+            }
+            guard valueStart < range.upperBound, bytes[valueStart] == 58 else {
+                cursor = position + quotedField.count
+                continue
+            }
+
+            valueStart += 1
+            while valueStart < range.upperBound, isJSONWhitespace(bytes[valueStart]) {
+                valueStart += 1
+            }
+            guard valueStart < range.upperBound, bytes[valueStart] == 34,
+                  let valueEnd = endOfQuotedString(
+                      in: bytes,
+                      startingAt: valueStart,
+                      upperBound: range.upperBound
+                  ) else {
+                cursor = position + quotedField.count
+                continue
+            }
+
+            let valueData = Data(bytes[valueStart...valueEnd])
+            if let value = LocalData.parseJSON(data: valueData) as? String {
+                return value
+            }
+            cursor = valueEnd + 1
+        }
+        return nil
+    }
+
+    private static func endOfQuotedString(
+        in bytes: [UInt8],
+        startingAt start: Int,
+        upperBound: Int
+    ) -> Int? {
+        guard start >= 0, start < upperBound, bytes[start] == 34 else { return nil }
+        var escaped = false
+        var index = start + 1
+        while index < upperBound {
+            let byte = bytes[index]
+            if escaped {
+                escaped = false
+            } else if byte == 92 {
+                escaped = true
+            } else if byte == 34 {
+                return index
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    private static func printableValue(
+        after start: Int,
+        in bytes: [UInt8],
+        upperBound: Int
+    ) -> String? {
+        guard start >= 0, start < upperBound else { return nil }
+        var index = start
+        while index < upperBound {
+            while index < upperBound, !isPrintable(bytes[index]) {
+                index += 1
+            }
+            guard index < upperBound else { return nil }
+            let valueStart = index
+            while index < upperBound, isPrintable(bytes[index]) {
+                index += 1
+            }
+            let value = String(bytes: bytes[valueStart..<index], encoding: .utf8)
+                ?? String(bytes: bytes[valueStart..<index], encoding: .ascii)
+            if let value {
+                return value.trimmingCharacters(
+                    in: CharacterSet(charactersIn: "\"'` \t\r\n,:{}[]")
+                )
+            }
+        }
+        return nil
+    }
+
+    private static func normalizedModelName(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let candidate = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard candidate.count >= 2, candidate.count <= 160,
+              !candidate.unicodeScalars.contains(where: {
+                  $0.value < 32 || $0.value == 127
+              }) else {
+            return nil
+        }
+
+        let lowercased = candidate.lowercased()
+        let ignoredValues: Set<String> = [
+            "unknown", "null", "nil", "none", "default", "model", "engine",
+            "path", "params", "events", "completion", "chat", "samantha"
+        ]
+        guard !ignoredValues.contains(lowercased) else { return nil }
+
+        // The raw fallback can see adjacent serialized strings. Require a
+        // recognizable model family or a version-like identifier so prompts,
+        // URLs, and telemetry labels are not shown as a model name.
+        let knownFamily = [
+            "doubao", "seed", "pro", "lite", "turbo", "thinking", "reason",
+            "deepseek", "qwen", "kimi", "glm", "claude", "gpt", "gemini", "ark"
+        ].contains { lowercased.contains($0) }
+        let hasDigit = candidate.unicodeScalars.contains { $0.properties.numericType != nil }
+        guard knownFamily || hasDigit else { return nil }
+        return ModelUsage.normalizedName(candidate)
+    }
+
+    private static func isJSONWhitespace(_ byte: UInt8) -> Bool {
+        byte == 32 || byte == 9 || byte == 10 || byte == 13
+    }
+
+    private static func isPrintable(_ byte: UInt8) -> Bool {
+        (32...126).contains(byte)
+    }
+
+    private static func isIdentifierByte(_ byte: UInt8?) -> Bool {
+        guard let byte else { return false }
+        return (48...57).contains(byte)
+            || (65...90).contains(byte)
+            || (97...122).contains(byte)
+            || byte == 95
     }
 
     private static func mergedModelEvents(
@@ -334,8 +659,20 @@ enum DoubaoWorkUsageScanner {
     ) -> [DoubaoWorkModelEvent] {
         var byID: [String: DoubaoWorkModelEvent] = [:]
         for event in events {
-            if let existing = byID[event.id], existing.date <= event.date {
-                continue
+            if let existing = byID[event.id] {
+                // A cache created before model parsing may contain the same
+                // event without a model. Prefer the newly parsed value even
+                // when its date is identical.
+                if existing.model == nil, event.model != nil {
+                    byID[event.id] = event
+                    continue
+                }
+                if existing.model != nil, event.model == nil {
+                    continue
+                }
+                if existing.date <= event.date {
+                    continue
+                }
             }
             byID[event.id] = event
         }
@@ -580,7 +917,10 @@ enum DoubaoWorkUsageScanner {
                 statusCode: statusCode,
                 requestSize: LocalData.number(params["req_size"]),
                 responseSize: LocalData.number(params["rsp_size"]),
-                durationMilliseconds: LocalData.number(params["req2rsp_dur_ms"])
+                durationMilliseconds: LocalData.number(params["req2rsp_dur_ms"]),
+                model: modelName(from: event)
+                    ?? modelName(from: params)
+                    ?? modelName(from: LocalData.embeddedJSON(event["data"]))
             )
         }
     }
