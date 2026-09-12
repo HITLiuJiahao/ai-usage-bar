@@ -207,7 +207,7 @@ enum CodexPricing {
     // Include the pricing algorithm and long-context threshold in the
     // version. A future formula change therefore revalues existing cached
     // events even when the local pricing file itself did not change.
-    private static let pricingRevision = "codex-pricing-v3-long-context-272k"
+    private static let pricingRevision = "codex-pricing-v4-hy4-alias-long-context-272k"
     private static let longContextThreshold = 272_000
     private static let pricingLock = NSLock()
     private static var pricingCatalog = makePricingCatalog()
@@ -260,6 +260,12 @@ enum CodexPricing {
             "kimi/k3-agent-swarm": "moonshotai/kimi-k3",
             "hy3": "tencent/hy3",
             "hy3-preview": "tencent/hy3-preview",
+            // WorkBuddy may report Hy4 without the preview suffix or provider
+            // prefix. Tencent's currently published Hy4 model is Hy4 preview,
+            // so resolve all of these forms to its canonical price row.
+            "hy4": "tencent/hy4-preview",
+            "tencent/hy4": "tencent/hy4-preview",
+            "hy4-preview": "tencent/hy4-preview",
             "qwen/qwen3.8-max": "qwen3.8-max",
             "qwen/qwen3.8-max-preview": "qwen3.8-max-preview",
             "deepseek/deepseek-v4-flash": "deepseek-v4-flash",
@@ -530,6 +536,12 @@ enum CodexPricing {
         }
         if value == "hy3-preview" {
             return "tencent/hy3-preview"
+        }
+        if value == "hy4" || value == "tencent/hy4" {
+            return "tencent/hy4-preview"
+        }
+        if value == "hy4-preview" || value == "tencent/hy4-preview" {
+            return "tencent/hy4-preview"
         }
         if value.hasPrefix("minimax/") {
             let suffix = String(value.dropFirst("minimax/".count))

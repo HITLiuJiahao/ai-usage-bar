@@ -84,7 +84,9 @@ private struct DoubaoWorkScanCache: Codable {
 }
 
 enum DoubaoWorkUsageScanner {
-    // Version 7 also keeps a best-effort model name when the local record
+    // Version 9 invalidates file entries from older parser versions before
+    // importing historical chat/completion start lines from the SDK text logs.
+    // Version 7 keeps a best-effort model name when the local record
     // exposes model/model_name/model_id (or an equivalent engine field).
     // Version 6 counts the local chat record's ext_window_usage entries when
     // available, while also retaining the Tea/SDK completion ledger. A single
@@ -93,13 +95,23 @@ enum DoubaoWorkUsageScanner {
     // long-lived local-tool SSE channel is not a usage counter: it reconnects
     // periodically while the app is idle. The cache also stores requests from
     // retired log files and uses request start times for daily buckets.
-    private static let cacheVersion = 7
+    private static let cacheVersion = 9
     private static let cacheOverlapBytes: Int64 = 2 * 1024 * 1024
     private static let completionPaths: Set<String> = [
         "/chat/completion",
         "/samantha/chat/completion"
     ]
     private static let eventMarker = Data("{\"events\":".utf8)
+    private static let sdkChatCompletionPrefixes: [(path: String, marker: [UInt8])] = [
+        (
+            "/chat/completion",
+            Array("start request here: https://www.doubao.com/chat/completion".utf8)
+        ),
+        (
+            "/samantha/chat/completion",
+            Array("start request here: https://www.doubao.com/samantha/chat/completion".utf8)
+        )
+    ]
     private static let taskMarker = Array("thread_local_message_id".utf8)
     private static let chatFolderMarker = Array("/DoubaoWork/chats/".utf8)
     private static let modelUsageMarker = Array("ext_window_usage\"\\{".utf8)
@@ -112,18 +124,27 @@ enum DoubaoWorkUsageScanner {
     static func scan() -> DoubaoWorkScanResult {
         let files = logFiles()
         let chatFiles = chatDatabaseFiles()
-        let previous = loadCache()
+        let storedCache = loadCache()
+        let cacheIsCompatible = storedCache?.version == cacheVersion
+        let previous = cacheIsCompatible ? storedCache : nil
         var current: [String: DoubaoWorkFileEntry] = [:]
-        var archivedRequests = previous?.archivedRequests ?? []
+        var archivedRequests = storedCache?.archivedRequests ?? []
+        if !cacheIsCompatible {
+            // Keep requests from a prior parser version while every active
+            // file is rescanned. The final identity pass removes duplicates,
+            // and retaining these entries prevents a cache migration from
+            // erasing already archived log history.
+            archivedRequests.append(contentsOf: storedCache?.files.values.flatMap(\.requests) ?? [])
+        }
         let chatScans = chatFiles.map(parseChatUsage)
         let hasModernModelEvents = chatScans.contains { !$0.modernEvents.isEmpty }
         let detectedModelEvents = chatScans.flatMap {
             hasModernModelEvents ? $0.modernEvents : $0.legacyEvents
         }
-        let modelEvents = mergedModelEvents((previous?.modelEvents ?? []) + detectedModelEvents)
+        let modelEvents = mergedModelEvents((storedCache?.modelEvents ?? []) + detectedModelEvents)
         let detectedTasks = chatFiles.flatMap(parseTasks)
-        let tasks = mergedTasks((previous?.tasks ?? []) + detectedTasks)
-        var cacheDirty = previous == nil
+        let tasks = mergedTasks((storedCache?.tasks ?? []) + detectedTasks)
+        var cacheDirty = storedCache == nil || !cacheIsCompatible
 
         for file in files {
             let key = file.url.resolvingSymlinksInPath().standardizedFileURL.path
@@ -145,10 +166,18 @@ enum DoubaoWorkUsageScanner {
                 let offset = max(cached.size - cacheOverlapBytes, 0)
                 requests = mergeRequests(
                     cached.requests,
-                    parseFile(at: file.url, from: offset)
+                    parseFile(
+                        at: file.url,
+                        from: offset,
+                        fallbackDate: Date(timeIntervalSince1970: file.modifiedAt)
+                    )
                 )
             } else {
-                requests = parseFile(at: file.url, from: 0)
+                requests = parseFile(
+                    at: file.url,
+                    from: 0,
+                    fallbackDate: Date(timeIntervalSince1970: file.modifiedAt)
+                )
             }
 
             if let cached = previous?.files[key] {
@@ -186,8 +215,7 @@ enum DoubaoWorkUsageScanner {
            Set(previous.files.keys) != Set(current.keys) ||
            previous.archivedRequests.count != archivedRequests.count ||
            previous.tasks != tasks ||
-           previous.modelEvents != modelEvents ||
-           previous.version != cacheVersion {
+           previous.modelEvents != modelEvents {
             cacheDirty = true
         }
         if cacheDirty {
@@ -861,12 +889,141 @@ enum DoubaoWorkUsageScanner {
         return Int(String(bytes: bytes[range], encoding: .ascii) ?? "")
     }
 
-    private static func parseFile(at url: URL, from offset: Int64) -> [DoubaoWorkRequest] {
-        guard let data = readData(at: url, from: offset),
-              data.range(of: eventMarker) != nil else {
-            return []
+    private static func parseFile(
+        at url: URL,
+        from offset: Int64,
+        fallbackDate: Date
+    ) -> [DoubaoWorkRequest] {
+        guard let data = readData(at: url, from: offset) else { return [] }
+        let bytes = Array(data)
+        var requests = embeddedJSONObjects(in: bytes).flatMap(extractRequests)
+        requests.append(contentsOf: parseSDKRequests(
+            in: bytes,
+            fileURL: url,
+            fallbackDate: fallbackDate
+        ))
+        return deduplicated(requests)
+    }
+
+    private static func parseSDKRequests(
+        in bytes: [UInt8],
+        fileURL: URL,
+        fallbackDate: Date
+    ) -> [DoubaoWorkRequest] {
+        guard !bytes.isEmpty else { return [] }
+        var requests: [DoubaoWorkRequest] = []
+
+        for prefix in sdkChatCompletionPrefixes {
+            var cursor = 0
+            while let position = find(prefix.marker, in: bytes, from: cursor) {
+                let urlEnd = position + prefix.marker.count
+                let nextByte = urlEnd < bytes.count ? bytes[urlEnd] : nil
+                guard isURLTerminator(nextByte),
+                      let date = sdkLogDate(
+                          in: bytes,
+                          around: position,
+                          fileURL: fileURL,
+                          fallbackDate: fallbackDate
+                      ) else {
+                    cursor = urlEnd
+                    continue
+                }
+
+                requests.append(DoubaoWorkRequest(
+                    date: date,
+                    requestStartDate: date,
+                    requestEndDate: nil,
+                    path: prefix.path,
+                    statusCode: nil,
+                    requestSize: nil,
+                    responseSize: nil,
+                    durationMilliseconds: nil,
+                    model: nil
+                ))
+                cursor = urlEnd
+            }
         }
-        return embeddedJSONObjects(in: data).flatMap(extractRequests)
+        return requests
+    }
+
+    private static func sdkLogDate(
+        in bytes: [UInt8],
+        around position: Int,
+        fileURL: URL,
+        fallbackDate: Date
+    ) -> Date? {
+        var lineStart = position
+        while lineStart > 0, bytes[lineStart - 1] != 10 {
+            lineStart -= 1
+        }
+        var lineEnd = position
+        while lineEnd < bytes.count, bytes[lineEnd] != 10 {
+            lineEnd += 1
+        }
+
+        let year = sdkLogYear(fileURL: fileURL, fallbackDate: fallbackDate)
+        guard lineStart < lineEnd else { return nil }
+        var index = lineStart
+        while index + 12 < lineEnd {
+            guard bytes[index] == 58,
+                  (1...4).allSatisfy({ isDigit(bytes[index + $0]) }),
+                  bytes[index + 5] == 47,
+                  (6...11).allSatisfy({ isDigit(bytes[index + $0]) }),
+                  bytes[index + 12] == 46 else {
+                index += 1
+                continue
+            }
+
+            var fractionEnd = index + 13
+            while fractionEnd < lineEnd, isDigit(bytes[fractionEnd]) {
+                fractionEnd += 1
+            }
+            guard let month = integer(in: bytes, range: (index + 1)..<(index + 3)),
+                  let day = integer(in: bytes, range: (index + 3)..<(index + 5)),
+                  let hour = integer(in: bytes, range: (index + 6)..<(index + 8)),
+                  let minute = integer(in: bytes, range: (index + 8)..<(index + 10)),
+                  let second = integer(in: bytes, range: (index + 10)..<(index + 12)),
+                  let fraction = Double(
+                      "0.\(String(bytes: bytes[(index + 13)..<fractionEnd], encoding: .ascii) ?? "0")"
+                  ) else {
+                index += 1
+                continue
+            }
+
+            var components = DateComponents()
+            components.year = year
+            components.month = month
+            components.day = day
+            components.hour = hour
+            components.minute = minute
+            components.second = second
+            guard let baseDate = Calendar.autoupdatingCurrent.date(from: components) else {
+                index += 1
+                continue
+            }
+            return baseDate.addingTimeInterval(fraction)
+        }
+        return nil
+    }
+
+    private static func sdkLogYear(fileURL: URL, fallbackDate: Date) -> Int {
+        let bytes = Array(fileURL.lastPathComponent.utf8)
+        guard bytes.count >= 4 else {
+            return Calendar.autoupdatingCurrent.component(.year, from: fallbackDate)
+        }
+        let lastStart = bytes.count - 4
+        for index in 0...lastStart {
+            guard (0..<4).allSatisfy({ isDigit(bytes[index + $0]) }),
+                  let year = integer(in: bytes, range: index..<(index + 4)),
+                  (2000...2100).contains(year) else { continue }
+            return year
+        }
+        return Calendar.autoupdatingCurrent.component(.year, from: fallbackDate)
+    }
+
+    private static func isURLTerminator(_ byte: UInt8?) -> Bool {
+        guard let byte else { return true }
+        return byte == 63 || byte == 32 || byte == 9 || byte == 13 || byte == 10
     }
 
     private static func readData(at url: URL, from offset: Int64) -> Data? {
@@ -958,8 +1115,7 @@ enum DoubaoWorkUsageScanner {
         ].joined(separator: "|")
     }
 
-    private static func embeddedJSONObjects(in data: Data) -> [[String: Any]] {
-        let bytes = Array(data)
+    private static func embeddedJSONObjects(in bytes: [UInt8]) -> [[String: Any]] {
         let marker = Array(eventMarker)
         guard !bytes.isEmpty, bytes.count >= marker.count else { return [] }
 
