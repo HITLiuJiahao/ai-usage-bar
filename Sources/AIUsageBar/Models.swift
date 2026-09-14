@@ -171,6 +171,7 @@ struct UsageMetric: Identifiable, Codable {
     /// A remaining quota by itself is not activity, so an untouched plan can
     /// be omitted from the period dashboard just like Tokei does.
     var hasActualUsage: Bool {
+        guard kind != .quota else { return false }
         if let used, used > 0 { return true }
         return [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens]
             .contains { ($0 ?? 0) > 0 }
