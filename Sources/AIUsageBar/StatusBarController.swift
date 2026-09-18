@@ -139,8 +139,8 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
         if let statusQuota {
             let remaining = statusQuota.primaryRemaining
             button.image = CodexQuotaStatusImage.make(
-                fiveHourRemainingPercent: remaining,
-                weeklyRemainingPercent: statusQuota.weeklyRemaining
+                primaryRemainingPercent: remaining,
+                weeklyRemainingPercent: statusQuota.secondaryWeeklyRemaining
             )
             button.attributedTitle = NSAttributedString(
                 string: "\(remaining)%",
@@ -154,7 +154,7 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
             button.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
             button.toolTip = L10n.codexStatusTooltip(
                 remaining: remaining,
-                weeklyRemaining: statusQuota.weeklyRemaining,
+                weeklyRemaining: statusQuota.secondaryWeeklyRemaining,
                 window: statusQuota.primaryWindow,
                 sidebarDisabled: edgeDockExpansionSettings.mode.isDisabled
             )
@@ -940,18 +940,24 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
 
 private enum CodexQuotaStatusImage {
     static func make(
-        fiveHourRemainingPercent: Int,
+        primaryRemainingPercent: Int,
         weeklyRemainingPercent: Int?
     ) -> NSImage {
-        // Match the menu bar's full icon height while leaving the title's
-        // baseline and the status item margins untouched.
-        let size = NSSize(width: 24, height: 22)
+        let showsWeeklyBar = weeklyRemainingPercent != nil
+        // A Pro Lite status item has one value only, so use a compact square
+        // canvas and center the ring in it. Plans with two values keep the
+        // stacked ring-plus-bar layout.
+        let size = NSSize(width: showsWeeklyBar ? 24 : 22, height: 22)
         let image = NSImage(size: size)
         image.lockFocus()
         defer { image.unlockFocus() }
 
-        let ringCenter = NSPoint(x: size.width / 2, y: 14)
-        let ringRadius: CGFloat = 6.0
+        let ringCenter = NSPoint(
+            x: size.width / 2,
+            y: showsWeeklyBar ? 14 : size.height / 2
+        )
+        let ringRadius: CGFloat = showsWeeklyBar ? 6.0 : 8.5
+        let ringLineWidth: CGFloat = showsWeeklyBar ? 2.1 : 2.4
         let track = NSBezierPath(
             ovalIn: NSRect(
                 x: ringCenter.x - ringRadius,
@@ -960,37 +966,37 @@ private enum CodexQuotaStatusImage {
                 height: ringRadius * 2
             )
         )
-        track.lineWidth = 2.1
+        track.lineWidth = ringLineWidth
         NSColor.white.withAlphaComponent(0.24).setStroke()
         track.stroke()
 
-        let clampedFiveHour = min(max(fiveHourRemainingPercent, 0), 100)
-        if clampedFiveHour > 0 {
+        let clampedPrimary = min(max(primaryRemainingPercent, 0), 100)
+        if clampedPrimary > 0 {
             let progress = NSBezierPath()
-            progress.lineWidth = 2.1
+            progress.lineWidth = ringLineWidth
             progress.lineCapStyle = .round
             progress.appendArc(
                 withCenter: ringCenter,
                 radius: ringRadius,
                 startAngle: 90,
-                endAngle: 90 - (360 * CGFloat(clampedFiveHour) / 100),
+                endAngle: 90 - (360 * CGFloat(clampedPrimary) / 100),
                 clockwise: true
             )
             NSColor.systemBlue.setStroke()
             progress.stroke()
         }
 
-        let barFrame = NSRect(x: 3, y: 2.5, width: 18, height: 3.2)
-        let barRadius = barFrame.height / 2
-        let barTrack = NSBezierPath(
-            roundedRect: barFrame,
-            xRadius: barRadius,
-            yRadius: barRadius
-        )
-        NSColor.white.withAlphaComponent(0.24).setFill()
-        barTrack.fill()
-
         if let weeklyRemainingPercent {
+            let barFrame = NSRect(x: 3, y: 2.5, width: 18, height: 3.2)
+            let barRadius = barFrame.height / 2
+            let barTrack = NSBezierPath(
+                roundedRect: barFrame,
+                xRadius: barRadius,
+                yRadius: barRadius
+            )
+            NSColor.white.withAlphaComponent(0.24).setFill()
+            barTrack.fill()
+
             let clamped = min(max(weeklyRemainingPercent, 0), 100)
             if clamped > 0 {
                 let remainingWidth = barFrame.width * CGFloat(clamped) / 100
