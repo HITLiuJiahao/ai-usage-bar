@@ -649,6 +649,7 @@ enum CodexUsageScanner {
         let size: Int64
         let modifiedAt: Double
         let sessionID: String?
+        let threadID: String?
         let forkedFromID: String?
         let events: [CodexEvent]
         let latestQuota: CodexQuotaSnapshot?
@@ -683,12 +684,13 @@ enum CodexUsageScanner {
         let recognizedEventCount: Int
     }
 
-    // Version 4 rebuilds the event cache after fixing incremental overlap
-    // matching. Older entries may contain the same token_count event more
-    // than once when the pricing catalog changed between refreshes.
-    private static let cacheVersion = 4
+    // Version 5 keeps the actual thread identity in each rollout entry.
+    // Codex can continue one root session across several files; treating the
+    // root session ID as the file identity would discard a newer continuation
+    // when an older file happens to contain more events.
+    private static let cacheVersion = 5
     private static let cacheURL = AppPaths.appSupport.appendingPathComponent("codex-scan-cache.json")
-    private static let summaryCacheVersion = 2
+    private static let summaryCacheVersion = 3
     private static let summaryCacheURL = AppPaths.appSupport.appendingPathComponent("codex-summary-cache.json")
     private static let incrementalOverlapBytes: Int64 = 2 * 1024 * 1024
     private static let tokenMarker = Data("\"token_count\"".utf8)
@@ -831,6 +833,7 @@ enum CodexUsageScanner {
             size: size,
             modifiedAt: modifiedAt,
             sessionID: tail.sessionID ?? previous.sessionID,
+            threadID: tail.threadID ?? previous.threadID,
             forkedFromID: tail.forkedFromID ?? previous.forkedFromID,
             events: events,
             latestQuota: tail.latestQuota ?? previous.latestQuota
@@ -907,6 +910,7 @@ enum CodexUsageScanner {
             size: entry.size,
             modifiedAt: entry.modifiedAt,
             sessionID: entry.sessionID,
+            threadID: entry.threadID,
             forkedFromID: entry.forkedFromID,
             events: events,
             latestQuota: entry.latestQuota
@@ -963,6 +967,7 @@ enum CodexUsageScanner {
         initial: FileEntry? = nil
     ) -> FileEntry {
         var sessionID = initial?.sessionID
+        let threadID = initial?.threadID
         var forkedFromID = initial?.forkedFromID
         var currentModel = initial?.events.last?.model
         var previousTotalKey = initial?.events.last?.totalKey
@@ -983,6 +988,10 @@ enum CodexUsageScanner {
                 if sessionID == nil { sessionID = metaID }
                 if forkedFromID == nil {
                     forkedFromID = LocalData.string(payload["forked_from_id"] ?? payload["parent_thread_id"])
+                    if forkedFromID == nil,
+                       let historyBase = payload["history_base"] as? [String: Any] {
+                        forkedFromID = LocalData.string(historyBase["thread_id"])
+                    }
                     if forkedFromID == nil,
                        let source = payload["source"] as? [String: Any],
                        let subagent = source["subagent"] as? [String: Any],
@@ -1072,6 +1081,7 @@ enum CodexUsageScanner {
             size: size,
             modifiedAt: modifiedAt,
             sessionID: sessionID,
+            threadID: threadID ?? rolloutThreadID(for: url, sessionID: sessionID),
             forkedFromID: forkedFromID,
             events: events,
             latestQuota: latestQuota
@@ -1168,11 +1178,25 @@ enum CodexUsageScanner {
             && lhs.model == rhs.model
     }
 
+    private static func rolloutThreadID(for url: URL, sessionID: String?) -> String? {
+        let filename = url.deletingPathExtension().lastPathComponent
+        guard let sessionID,
+              let range = filename.range(of: sessionID) else {
+            return sessionID
+        }
+        let suffix = filename[range.upperBound...]
+        guard suffix.first == "_" else { return sessionID }
+        let threadID = suffix.dropFirst()
+        return threadID.isEmpty ? sessionID : String(threadID)
+    }
+
     private static func canonicalEntries(_ entries: [String: FileEntry]) -> [String: FileEntry] {
         var selected: [String: (score: (Int, Double, Int64), path: String)] = [:]
         var result: [String: FileEntry] = [:]
         for (path, entry) in entries {
-            let logicalID = entry.sessionID.map { "session:\($0)" } ?? "rollout:\(URL(fileURLWithPath: path).lastPathComponent)"
+            let logicalID = entry.threadID.map { "thread:\($0)" }
+                ?? entry.sessionID.map { "session:\($0)" }
+                ?? "rollout:\(URL(fileURLWithPath: path).lastPathComponent)"
             let score = (entry.events.count, entry.events.last?.timestamp ?? 0, entry.size)
             if let existing = selected[logicalID], score <= existing.score { continue }
             if let existing = selected[logicalID] { result.removeValue(forKey: existing.path) }
@@ -1189,8 +1213,9 @@ enum CodexUsageScanner {
     ) -> Int {
         var best = 0
         if let parentID = entry.forkedFromID,
-           let parent = entries.first(where: { $0.value.sessionID == parentID }) {
-            best = prefixMatch(entry.events, parent.value.events)
+           let parent = entries.values.first(where: { $0.threadID == parentID })
+                ?? entries.values.first(where: { $0.sessionID == parentID }) {
+            best = prefixMatch(entry.events, parent.events)
         }
 
         if best == 0, entry.events.count >= 2,
