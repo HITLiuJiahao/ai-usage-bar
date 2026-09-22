@@ -29,7 +29,7 @@ Download the latest Apple Silicon (`arm64`) ZIP from [GitHub Releases](https://g
 - Supports launching automatically at login.
 - Lets you edit the relative order of AI tools in the edge Dock from settings; the order is saved locally and is also used by the full dashboard.
 - Lets you choose whether the edge Dock expands from the right edge, left edge, both edges, or not at all; the choice is saved locally.
-- Supports Simplified Chinese (default), English, Japanese, and Korean; the selected interface language applies immediately and is saved locally.
+- Supports Simplified Chinese (default), Traditional Chinese, English, Japanese, Korean, Spanish, French, German, Italian, Brazilian Portuguese, and Russian; the selected interface language applies immediately and is saved locally.
 - Includes an optional original desktop pet: a draggable, transparent, cross-Space companion whose mood reacts to local AI activity. It automatically follows locally recorded Codex task lifecycle events—running, completed, and blocked—without uploading a rollout log. Right-click it for level/XP, energy, streaks, a seven-day activity chart, live quotas, active-agent timers, and achievements.
 - After the pet is hidden, the app explains how to show it again from the menu bar or Settings; the reminder can be disabled permanently from the prompt.
 - Tracks local pet growth without a cloud account: token deltas and completed sessions feed the pet; it has five evolution stages, 14 achievements, configurable speech bubbles, notification/sound preferences, break reminders, and a rolling 90-day activity/session archive.
@@ -182,7 +182,7 @@ Click the gear icon in the upper-right corner of the dashboard, or right-click t
 5. Removing an account only deletes the account configuration saved by AI Usage Bar. It does not delete local data belonging to the corresponding client.
 6. Adjust the **Sidebar AI Tool Order** section by dragging tools or using the up/down controls. The order is retained across launches, and **Restore Default** returns to the built-in order.
 7. Choose the **Sidebar Expansion** position: the right edge, left edge, both edges, or **Disable the sidebar**. With the sidebar disabled, clicking the menu bar icon opens the full overview directly.
-8. Choose a language in the **Language** section. The default is Simplified Chinese; the selection applies immediately and is retained across launches.
+8. Choose a language in the **Language** section. The default is Simplified Chinese; Traditional Chinese, English, Japanese, Korean, Spanish, French, German, Italian, Brazilian Portuguese, and Russian are also available. The selection applies immediately and is retained across launches.
 9. Use the **Desktop Pet** section to show/hide the companion, adjust its size and opacity, enable break reminders or notifications, import a pet pack, set optional custom messages, bind project folders, and inspect achievements/session history. Clicking a pet feeds it; right-clicking opens its HUD.
 
 ### Desktop Pet Hook Bridge

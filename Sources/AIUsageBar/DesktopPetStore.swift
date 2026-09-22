@@ -60,7 +60,11 @@ struct DesktopPetPreferences: Codable, Equatable {
 /// pet.json + PNG convention so users can make or share their own pets without
 /// tying the app to any third-party gallery or service.
 struct PetPack: Codable, Identifiable, Hashable {
-    static let defaultPackID = "aiusagebar-orbit"
+    static let legacyDefaultPackID = "aiusagebar-orbit"
+    static let catPackID = "aiusagebar-cat"
+    static let bearPackID = "aiusagebar-bear"
+    static let foxPackID = "aiusagebar-fox"
+    static let defaultPackID = catPackID
 
     let id: String
     var name: String
@@ -68,13 +72,40 @@ struct PetPack: Codable, Identifiable, Hashable {
     var columns: Int
     var bundled: Bool
 
-    static let defaultPack = PetPack(
-        id: defaultPackID,
+    static let catPack = PetPack(
+        id: catPackID,
+        name: "Cat",
+        spritePath: "pet-cat-sprite.png",
+        columns: 4,
+        bundled: true
+    )
+
+    static let bearPack = PetPack(
+        id: bearPackID,
+        name: "Bear",
+        spritePath: "pet-bear-sprite.png",
+        columns: 4,
+        bundled: true
+    )
+
+    static let foxPack = PetPack(
+        id: foxPackID,
+        name: "Fox",
+        spritePath: "pet-fox-sprite.png",
+        columns: 4,
+        bundled: true
+    )
+
+    static let legacyDefaultPack = PetPack(
+        id: legacyDefaultPackID,
         name: "Orbit",
         spritePath: "usage-orb-sprite.png",
         columns: 4,
         bundled: true
     )
+
+    static let bundledPacks = [catPack, bearPack, foxPack, legacyDefaultPack]
+    static let defaultPack = catPack
 
     func frameIndex(for mood: DesktopPetMood) -> Int {
         switch mood {
@@ -263,7 +294,7 @@ private struct DesktopPetSavedState: Codable {
         progress = try container.decodeIfPresent(PetProgress.self, forKey: .progress) ?? PetProgress()
         history = try container.decodeIfPresent([PetDayHistory].self, forKey: .history) ?? []
         achievements = try container.decodeIfPresent(Set<DesktopPetAchievement>.self, forKey: .achievements) ?? []
-        packs = try container.decodeIfPresent([PetPack].self, forKey: .packs) ?? [PetPack.defaultPack]
+        packs = try container.decodeIfPresent([PetPack].self, forKey: .packs) ?? PetPack.bundledPacks
         projectMappings = try container.decodeIfPresent([PetProjectMapping].self, forKey: .projectMappings) ?? []
         activeSessions = try container.decodeIfPresent([PetActiveAgentSession].self, forKey: .activeSessions) ?? []
         sessionArchive = try container.decodeIfPresent([PetSessionArchiveEntry].self, forKey: .sessionArchive) ?? []
@@ -298,10 +329,13 @@ enum DesktopPetStorage {
 @MainActor
 final class DesktopPetStore: ObservableObject {
     static let shared = DesktopPetStore()
-    private static let workingSessionLifetime: TimeInterval = 15 * 60
+    // A third-party hook may not send a terminal event when its client exits.
+    // Keep working rows short-lived unless a fresh event refreshes them.
+    private static let workingSessionLifetime: TimeInterval = 5 * 60
     private static let blockedSessionLifetime: TimeInterval = 30 * 60
     private static let codexSessionPrefix = "codex-log:"
     private static let hideReminderSuppressedKey = "AIUsageBar.desktopPet.hideReminderSuppressed"
+    private static let animalPackMigrationKey = "AIUsageBar.desktopPet.animalPacksMigrated"
 
     @Published private(set) var preferences: DesktopPetPreferences
     @Published private(set) var progress: PetProgress
@@ -332,14 +366,28 @@ final class DesktopPetStore: ObservableObject {
 
     private init() {
         let saved = Self.loadSavedState()
-        preferences = saved.preferences
+        var loadedPreferences = saved.preferences
+        var loadedPacks = saved.packs.isEmpty ? PetPack.bundledPacks : saved.packs
+        for bundledPack in PetPack.bundledPacks where !loadedPacks.contains(where: { $0.id == bundledPack.id }) {
+            loadedPacks.append(bundledPack)
+        }
+
+        var migratedLegacyDefault = false
+        if loadedPreferences.selectedPackID == PetPack.legacyDefaultPackID,
+           !UserDefaults.standard.bool(forKey: Self.animalPackMigrationKey) {
+            loadedPreferences.selectedPackID = PetPack.catPackID
+            migratedLegacyDefault = true
+        }
+        UserDefaults.standard.set(true, forKey: Self.animalPackMigrationKey)
+        if !loadedPacks.contains(where: { $0.id == loadedPreferences.selectedPackID }) {
+            loadedPreferences.selectedPackID = PetPack.defaultPackID
+            migratedLegacyDefault = true
+        }
+
+        preferences = loadedPreferences
         progress = saved.progress
         history = saved.history
         achievements = saved.achievements
-        var loadedPacks = saved.packs.isEmpty ? [PetPack.defaultPack] : saved.packs
-        if !loadedPacks.contains(where: { $0.id == PetPack.defaultPackID }) {
-            loadedPacks.insert(PetPack.defaultPack, at: 0)
-        }
         packs = loadedPacks
         projectMappings = saved.projectMappings
         showPetShortcut = Self.loadPetShortcut(
@@ -351,8 +399,12 @@ final class DesktopPetStore: ObservableObject {
             fallback: .defaultHide
         )
         let now = Date()
-        activeSessions = saved.activeSessions.filter {
-            !Self.isStaleActiveSession($0, now: now)
+        activeSessions = saved.activeSessions.filter { session in
+            guard !Self.isStaleActiveSession(session, now: now) else { return false }
+            // Working rows are transient. Codex rows are rehydrated from the
+            // rollout monitor; restoring other providers after a restart can
+            // resurrect a work item whose client has already exited.
+            return session.mood != .working || Self.isCodexActivitySession(session)
         }
         sessionArchive = saved.sessionArchive
         pruneHistory()
@@ -360,6 +412,9 @@ final class DesktopPetStore: ObservableObject {
         scheduleBreakTimer()
         updateSpeech(for: .idle)
         scheduleCodexActivityMonitoring()
+        if migratedLegacyDefault {
+            persist()
+        }
     }
 
     deinit {
@@ -1105,7 +1160,7 @@ final class DesktopPetStore: ObservableObject {
                 progress: PetProgress(),
                 history: [],
                 achievements: [],
-                packs: [PetPack.defaultPack],
+                packs: PetPack.bundledPacks,
                 projectMappings: [],
                 activeSessions: [],
                 sessionArchive: []
@@ -1257,6 +1312,7 @@ enum PetText {
         case .english: return "I’m here with you."
         case .japanese: return "ここで見守っています。"
         case .korean: return "여기서 함께하고 있어요."
+        default: return PetUI.localizedText("I’m here with you.")
         }
     }
 
@@ -1266,6 +1322,7 @@ enum PetText {
         case .english: return "is working"
         case .japanese: return "作業中"
         case .korean: return "작업 중"
+        default: return PetUI.localizedText("is working")
         }
     }
 
@@ -1275,6 +1332,7 @@ enum PetText {
         case .english: return "Needs your attention."
         case .japanese: return "あなたの確認が必要です。"
         case .korean: return "확인이 필요해요."
+        default: return PetUI.localizedText("Needs your attention.")
         }
     }
 
@@ -1284,6 +1342,7 @@ enum PetText {
         case .english: return "Task blocked. Needs attention."
         case .japanese: return "タスクが中断されました。対応が必要です。"
         case .korean: return "작업이 중단되었어요. 확인이 필요합니다."
+        default: return PetUI.localizedText("Task blocked. Needs attention.")
         }
     }
 
@@ -1293,6 +1352,7 @@ enum PetText {
         case .english: return "Task complete. Nicely done!"
         case .japanese: return "完了しました。おつかれさま！"
         case .korean: return "작업 완료! 수고했어요!"
+        default: return PetUI.localizedText("Task complete. Nicely done!")
         }
     }
 
@@ -1302,6 +1362,7 @@ enum PetText {
         case .english: return "Energy restored!"
         case .japanese: return "元気をチャージ！"
         case .korean: return "에너지를 채웠어요!"
+        default: return PetUI.localizedText("Energy restored!")
         }
     }
 
@@ -1311,6 +1372,7 @@ enum PetText {
         case .english: return "Taking a quiet moment."
         case .japanese: return "少し休憩中です。"
         case .korean: return "잠시 쉬고 있어요."
+        default: return PetUI.localizedText("Taking a quiet moment.")
         }
     }
 
@@ -1320,6 +1382,7 @@ enum PetText {
         case .english: return "You’ve been at it a while — take a short break."
         case .japanese: return "少し続けて作業しました。短い休憩をどうぞ。"
         case .korean: return "한참 집중했어요. 잠깐 쉬어가요."
+        default: return PetUI.localizedText("You’ve been at it a while — take a short break.")
         }
     }
 
@@ -1329,6 +1392,7 @@ enum PetText {
         case .english: return "Choose a pet pack folder containing pet.json and a transparent PNG sprite"
         case .japanese: return "pet.json と透明 PNG スプライトを含むペットパックを選択"
         case .korean: return "pet.json과 투명 PNG 스프라이트가 있는 펫 팩 폴더를 선택하세요"
+        default: return PetUI.localizedText("Choose a pet pack folder containing pet.json and a transparent PNG sprite")
         }
     }
 
@@ -1338,6 +1402,7 @@ enum PetText {
         case .english: return "Import Pet Pack"
         case .japanese: return "ペットパックを読み込む"
         case .korean: return "펫 팩 가져오기"
+        default: return PetUI.localizedText("Import Pet Pack")
         }
     }
 
@@ -1347,6 +1412,7 @@ enum PetText {
         case .english: return "This pet pack is missing a valid pet.json or sprite."
         case .japanese: return "有効な pet.json またはスプライトが見つかりません。"
         case .korean: return "유효한 pet.json 또는 스프라이트가 없습니다."
+        default: return PetUI.localizedText("This pet pack is missing a valid pet.json or sprite.")
         }
     }
 
@@ -1356,6 +1422,7 @@ enum PetText {
         case .english: return "A new companion joined!"
         case .japanese: return "新しい仲間が加わりました！"
         case .korean: return "새 친구가 합류했어요!"
+        default: return PetUI.localizedText("A new companion joined!")
         }
     }
 
@@ -1365,6 +1432,7 @@ enum PetText {
         case .english: return "Couldn’t import that pet pack."
         case .japanese: return "ペットパックを読み込めませんでした。"
         case .korean: return "펫 팩을 가져오지 못했어요."
+        default: return PetUI.localizedText("Couldn’t import that pet pack.")
         }
     }
 
@@ -1374,6 +1442,7 @@ enum PetText {
         case .english: return "Choose a project folder for a dedicated pet"
         case .japanese: return "専用ペットを割り当てるプロジェクトフォルダを選択"
         case .korean: return "전용 펫을 연결할 프로젝트 폴더를 선택하세요"
+        default: return PetUI.localizedText("Choose a project folder for a dedicated pet")
         }
     }
 
@@ -1383,6 +1452,7 @@ enum PetText {
         case .english: return "Add Project"
         case .japanese: return "プロジェクトを追加"
         case .korean: return "프로젝트 추가"
+        default: return PetUI.localizedText("Add Project")
         }
     }
 }

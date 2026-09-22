@@ -726,37 +726,64 @@ enum UsageMetrics {
 }
 
 enum NumberFormat {
-    static func compact(_ value: Double) -> String {
+    static func compact(
+        _ value: Double,
+        language: AppLanguage = AppLanguageSettings.currentLanguage
+    ) -> String {
         if value.isNaN || value.isInfinite { return "—" }
         let absolute = abs(value)
         if absolute >= 100_000_000 {
-            return String(format: "%.1f亿", value / 100_000_000)
+            switch language {
+            case .simplifiedChinese: return "\(decimal(value / 100_000_000, fractionDigits: 1, language: language))亿"
+            case .traditionalChinese, .japanese: return "\(decimal(value / 100_000_000, fractionDigits: 1, language: language))億"
+            case .korean: return "\(decimal(value / 100_000_000, fractionDigits: 1, language: language))억"
+            case .english:
+                if absolute >= 1_000_000_000 {
+                    return "\(decimal(value / 1_000_000_000, fractionDigits: 1, language: language))B"
+                }
+                return "\(decimal(value / 1_000_000, fractionDigits: 1, language: language))M"
+            default:
+                return "\(decimal(value / 1_000_000, fractionDigits: 1, language: language))M"
+            }
         }
         if absolute >= 1_000_000 {
-            return String(format: "%.1fM", value / 1_000_000)
+            return "\(decimal(value / 1_000_000, fractionDigits: 1, language: language))M"
         }
         if absolute >= 1_000 {
-            return String(format: "%.1fK", value / 1_000)
+            return "\(decimal(value / 1_000, fractionDigits: 1, language: language))K"
         }
         if value.rounded() == value {
-            return String(format: "%.0f", value)
+            return decimal(value, fractionDigits: 0, language: language)
         }
-        return String(format: "%.2f", value)
+        return decimal(value, fractionDigits: 2, language: language)
     }
 
-    static func currency(_ value: Double) -> String {
-        currency(value, unit: "USD")
+    static func currency(
+        _ value: Double,
+        language: AppLanguage = AppLanguageSettings.currentLanguage
+    ) -> String {
+        currency(value, unit: "USD", language: language)
     }
 
-    static func currency(_ value: Double, unit: String) -> String {
+    static func currency(
+        _ value: Double,
+        unit: String,
+        language: AppLanguage = AppLanguageSettings.currentLanguage
+    ) -> String {
         let isCNY = unit.uppercased() == "CNY"
-        let symbol = isCNY ? "¥" : "$"
         // DeepSeek's console presents CNY spend at two decimal places using
         // a truncated display value; keep the full precision in aggregation.
         let displayValue = isCNY
             ? (value * 100).rounded(.down) / 100
             : value
-        return String(format: "%@%.2f", symbol, displayValue)
+        let formatter = NumberFormatter()
+        formatter.locale = language.locale
+        formatter.numberStyle = .currency
+        formatter.currencyCode = isCNY ? "CNY" : "USD"
+        formatter.minimumFractionDigits = 2
+        formatter.maximumFractionDigits = 2
+        return formatter.string(from: NSNumber(value: displayValue))
+            ?? decimal(displayValue, fractionDigits: 2, language: language)
     }
 
     static func durationMinutes(_ value: Double) -> String {
@@ -765,5 +792,20 @@ enum NumberFormat {
         let hours = minutes / 60
         let remainder = minutes % 60
         return remainder == 0 ? "\(hours)h" : "\(hours)h\(String(format: "%02d", remainder))"
+    }
+
+    private static func decimal(
+        _ value: Double,
+        fractionDigits: Int,
+        language: AppLanguage
+    ) -> String {
+        let formatter = NumberFormatter()
+        formatter.locale = language.locale
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
+        formatter.minimumFractionDigits = fractionDigits
+        formatter.maximumFractionDigits = fractionDigits
+        return formatter.string(from: NSNumber(value: value))
+            ?? String(format: "%.\(fractionDigits)f", value)
     }
 }

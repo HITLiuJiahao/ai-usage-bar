@@ -63,10 +63,9 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
     private let discoveryInterval: TimeInterval = 2
     private let recentFileWindow: TimeInterval = 20 * 60
     // A task_started record can survive a crashed or closed Codex turn without
-    // a matching terminal record.  The scanner also refreshes this timestamp
-    // from recent turn activity below, so this is a safety limit for genuinely
-    // abandoned turns rather than a limit on the duration of active work.
-    private let runningActivityWindow: TimeInterval = 15 * 60
+    // a matching terminal record.  Require a fresh rollout event instead of
+    // keeping that row visible for the full lifetime of the old log file.
+    private let runningActivityWindow: TimeInterval = 5 * 60
     // A historical turn_aborted record is not proof that the conversation is
     // still blocked. Keep only recent blocked events eligible for the live
     // pet state; the full rollout history remains untouched.
@@ -243,17 +242,12 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                 }
                 tasks[id] = task
             } else {
-                // The tail may begin after task_started. A turn_context,
-                // token_usage_record, or recent response event still proves
-                // that this turn is active, so recover a lightweight running
-                // row instead of dropping it as an unknown event.
-                tasks[id] = MutableActivity(
-                    state: .running,
-                    startedAt: timestamp,
-                    updatedAt: timestamp,
-                    context: contexts[turnID] ?? sessionContext,
-                    action: action
-                )
+                // Do not infer a live task from an isolated historical
+                // response or usage record.  Only an explicit task_started
+                // event (or a task carried from a previous scan) can create a
+                // running row; this prevents old work from reappearing after
+                // a restart when its terminal event was outside the tail.
+                return
             }
         }
 
