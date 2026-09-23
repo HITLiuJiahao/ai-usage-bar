@@ -13,9 +13,11 @@ import Foundation
 /// - `credit` 是 WorkBuddy 自带的内部积分；金额则按模型对应的本地
 ///   Tokei/OpenRouter 价格表，对 Token 做独立的美元成本估算
 enum WorkBuddyUsageScanner {
+    // Version 5 replays cached WorkBuddy events so newly recognized model
+    // aliases, including Hy4, receive their current price estimate.
     // Version 4 includes function_call rawUsage records and keeps WorkBuddy's
     // inclusive prompt total in TokenBreakdown.input.
-    private static let cacheVersion = 4
+    private static let cacheVersion = 5
     private static let cacheURL = AppPaths.appSupport.appendingPathComponent("workbuddy-scan-cache.json")
 
     private struct Event {

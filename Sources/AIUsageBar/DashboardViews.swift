@@ -457,7 +457,7 @@ struct DashboardPopover: View {
 
             VStack(alignment: .trailing, spacing: 2) {
                 if let lastRefreshAt = store.lastRefreshAt {
-                    Text("\(L10n.text(.updated, language: languageSettings.language)) \(lastRefreshAt, format: .dateTime.hour().minute().second())")
+                    Text("\(L10n.text(.updated, language: languageSettings.language)) \(L10n.timeString(lastRefreshAt, language: languageSettings.language))")
                         .font(.system(size: 13, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.62))
                 } else {
@@ -842,12 +842,12 @@ private struct DashboardProviderCard: View {
             DashboardStat(
                 symbol: "arrow.down",
                 title: L10n.text(.input, language: languageSettings.language),
-                value: inputTokens.map(NumberFormat.compact) ?? "—"
+                value: inputTokens.map { NumberFormat.compact($0, language: languageSettings.language) } ?? "—"
             ),
             DashboardStat(
                 symbol: "arrow.up",
                 title: L10n.text(.output, language: languageSettings.language),
-                value: outputTokens.map(NumberFormat.compact) ?? "—"
+                value: outputTokens.map { NumberFormat.compact($0, language: languageSettings.language) } ?? "—"
             )
         ]
     }
@@ -895,7 +895,7 @@ private struct DashboardProviderCard: View {
                             if let resetAt = balance.resetAt {
                                 Text("·")
                                     .foregroundStyle(.white.opacity(0.28))
-                                Text(resetAt, formatter: Self.balanceDateFormatter)
+                                Text(resetAt, formatter: balanceDateFormatter)
                                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                                     .foregroundStyle(.white.opacity(0.55))
                             }
@@ -928,7 +928,7 @@ private struct DashboardProviderCard: View {
                         if let resetCreditsExpiresAt {
                             HStack(spacing: 4) {
                                 Text(L10n.text(.resetCreditsExpiresAt, language: languageSettings.language))
-                                Text(resetCreditsExpiresAt, formatter: Self.balanceDateFormatter)
+                                Text(resetCreditsExpiresAt, formatter: balanceDateFormatter)
                             }
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.52))
@@ -959,12 +959,9 @@ private struct DashboardProviderCard: View {
         }
     }
 
-    private static let balanceDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "MM-dd HH:mm"
-        return formatter
-    }()
+    private var balanceDateFormatter: DateFormatter {
+        L10n.shortDateTimeFormatter(language: languageSettings.language)
+    }
 
     private var cardContent: some View {
         VStack(alignment: .leading, spacing: 0) {

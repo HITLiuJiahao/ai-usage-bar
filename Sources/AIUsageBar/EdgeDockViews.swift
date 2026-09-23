@@ -593,7 +593,7 @@ private struct EdgeDockDetailView: View {
                             if let resetCreditsExpiresAt {
                                 HStack(spacing: 3) {
                                     Text(L10n.text(.resetCreditsExpiresAt, language: languageSettings.language))
-                                    Text(resetCreditsExpiresAt, formatter: Self.resetCreditDateFormatter)
+                                    Text(resetCreditsExpiresAt, formatter: resetCreditDateFormatter)
                                 }
                                 .font(.system(size: 9, weight: .medium, design: .monospaced))
                                 .foregroundStyle(.white.opacity(0.52))
@@ -752,12 +752,9 @@ private struct EdgeDockDetailView: View {
         "\(title) · \(activityPeriod.title(language: languageSettings.language))"
     }
 
-    private static let resetCreditDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "MM-dd HH:mm"
-        return formatter
-    }()
+    private var resetCreditDateFormatter: DateFormatter {
+        L10n.shortDateTimeFormatter(language: languageSettings.language)
+    }
 
     private var detailHeader: some View {
         HStack(spacing: 9) {
@@ -884,7 +881,7 @@ private struct EdgeDockQuotaRow: View {
                     Text("·")
                         .foregroundStyle(.white.opacity(0.28))
                     Text(
-                        "\(L10n.text(.resetAt, language: languageSettings.language)) \(Self.resetDateFormatter.string(from: resetAt))"
+                        "\(L10n.text(.resetAt, language: languageSettings.language)) \(resetDateFormatter.string(from: resetAt))"
                     )
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.52))
@@ -911,12 +908,9 @@ private struct EdgeDockQuotaRow: View {
         }
     }
 
-    private static let resetDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "MM-dd HH:mm"
-        return formatter
-    }()
+    private var resetDateFormatter: DateFormatter {
+        L10n.shortDateTimeFormatter(language: languageSettings.language)
+    }
 }
 
 private struct EdgeDockActivityRow: View {

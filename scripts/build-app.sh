@@ -9,13 +9,14 @@ if [[ "${AIUSAGEBAR_FORCE_DIRECT_BUILD:-0}" != "1" ]] && swift build -c release 
     BUILD_BINARY="$(swift build -c release --show-bin-path)/AIUsageBar"
 else
     echo "SwiftPM 构建未完成，尝试使用本机 Swift 直接编译菜单栏应用。" >&2
-    SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
+    SDK_PATH="${AIUSAGEBAR_SDK_PATH:-$(xcrun --sdk macosx --show-sdk-path)}"
+    MODULE_CACHE_PATH="${AIUSAGEBAR_MODULE_CACHE_PATH:-$PROJECT_ROOT/.build-module-cache}"
     FALLBACK_BINARY="$PROJECT_ROOT/.build/AIUsageBar-direct"
-    mkdir -p "$PROJECT_ROOT/.build-module-cache"
+    mkdir -p "$MODULE_CACHE_PATH"
     swiftc \
         -target arm64-apple-macosx13.0 \
         -sdk "$SDK_PATH" \
-        -module-cache-path "$PROJECT_ROOT/.build-module-cache" \
+        -module-cache-path "$MODULE_CACHE_PATH" \
         -parse-as-library \
         Sources/AIUsageBar/*.swift \
         -o "$FALLBACK_BINARY"

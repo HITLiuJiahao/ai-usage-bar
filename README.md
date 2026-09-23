@@ -29,8 +29,8 @@ Download the latest Apple Silicon (`arm64`) ZIP from [GitHub Releases](https://g
 - Supports launching automatically at login.
 - Lets you edit the relative order of AI tools in the edge Dock from settings; the order is saved locally and is also used by the full dashboard.
 - Lets you choose whether the edge Dock expands from the right edge, left edge, both edges, or not at all; the choice is saved locally.
-- Supports Simplified Chinese (default), English, Japanese, and Korean; the selected interface language applies immediately and is saved locally.
-- Includes an optional original desktop pet: a draggable, transparent, cross-Space companion whose mood reacts to local AI activity. It automatically follows locally recorded Codex task lifecycle events—running, completed, and blocked—without uploading a rollout log. Right-click it for level/XP, energy, streaks, a seven-day activity chart, live quotas, active-agent timers, and achievements.
+- Supports Simplified Chinese (default), Traditional Chinese, English, Japanese, Korean, Spanish, French, German, Italian, Brazilian Portuguese, and Russian; the selected interface language applies immediately and is saved locally.
+- Includes an optional original desktop pet: a draggable, transparent, cross-Space companion whose mood reacts to local AI activity. Choose from a cat, bear, fox, succulent, sunflower, or monstera. It automatically follows locally recorded Codex task lifecycle events—running, completed, and blocked—without uploading a rollout log. Right-click it for level/XP, energy, streaks, a seven-day activity chart, live quotas, active-agent timers, and achievements.
 - After the pet is hidden, the app explains how to show it again from the menu bar or Settings; the reminder can be disabled permanently from the prompt.
 - Tracks local pet growth without a cloud account: token deltas and completed sessions feed the pet; it has five evolution stages, 14 achievements, configurable speech bubbles, notification/sound preferences, break reminders, and a rolling 90-day activity/session archive.
 - Provides a local-only hook bridge for agents that expose lifecycle hooks. `AIUsageBar pet-event --provider … --state …` sends a small JSON event through an owner-only Unix socket; it can include a project path, model name, status message, Token delta, and request count, but never prompts, responses, or credentials.
@@ -93,6 +93,7 @@ Codex cost events are cached together with a deterministic price version. When t
 Special cases:
 
 - GPT-6 Astra uses OpenAI's official API Standard rates: $10 input, $1 cache-read, $12.50 cache-write, and $50 output per million tokens. Requests over 272K input tokens use the documented long-context multipliers. Codex subscription usage is still governed by its plan allowance, so this remains an API-equivalent estimate rather than an invoice.
+- GPT-6 Sol and Luna use OpenAI's official API Standard rates per million tokens: Sol $2 input / $0.20 cache-read / $2.50 cache-write / $10 output; Luna $0.10 / $0.01 / $0.125 / $0.50. Requests over 272K input tokens use the documented long-context multipliers; Codex subscription usage remains an API-equivalent estimate, not an invoice.
 - Codex Auto Review is mapped to `GPT-5.3-Codex` pricing.
 - DeepSeek Harness costs use the provider's official CNY peak/off-peak price table when the model and timestamp can be matched.
 - WorkBuddy matches the actual model names in its logs to Kimi/Hy model pricing and prefers the local Tokei pricing files.
@@ -182,12 +183,12 @@ Click the gear icon in the upper-right corner of the dashboard, or right-click t
 5. Removing an account only deletes the account configuration saved by AI Usage Bar. It does not delete local data belonging to the corresponding client.
 6. Adjust the **Sidebar AI Tool Order** section by dragging tools or using the up/down controls. The order is retained across launches, and **Restore Default** returns to the built-in order.
 7. Choose the **Sidebar Expansion** position: the right edge, left edge, both edges, or **Disable the sidebar**. With the sidebar disabled, clicking the menu bar icon opens the full overview directly.
-8. Choose a language in the **Language** section. The default is Simplified Chinese; the selection applies immediately and is retained across launches.
+8. Choose a language in the **Language** section. The default is Simplified Chinese; Traditional Chinese, English, Japanese, Korean, Spanish, French, German, Italian, Brazilian Portuguese, and Russian are also available. The selection applies immediately and is retained across launches.
 9. Use the **Desktop Pet** section to show/hide the companion, adjust its size and opacity, enable break reminders or notifications, import a pet pack, set optional custom messages, bind project folders, and inspect achievements/session history. Clicking a pet feeds it; right-clicking opens its HUD.
 
 ### Desktop Pet Hook Bridge
 
-The pet uses local usage changes for growth, while Codex lifecycle records drive its automatic live state: a running task works, a completed task celebrates, and an aborted task is shown as blocked. While a Codex task is running, the pet can also show a privacy-safe activity summary such as thinking, running a command, editing files, reading files, searching the web, or calling a tool. Agents that support lifecycle hooks can provide the same richer live states (`working`, `waiting`, `blocked`, and `done`), plus a model badge, a project, and accurate session completion. The feature uses lifecycle and tool metadata only; it does not retain or upload prompts, responses, credentials, command arguments, file contents, or tool payloads.
+The pet uses local usage changes for growth, while Codex lifecycle records drive its automatic live state: a running task works, a completed task celebrates, and an aborted task is shown as blocked. While a Codex task is running, the pet can also show a privacy-safe activity summary such as thinking, running a command, editing files, reading files, searching the web, or calling a tool. When the local activity metadata provides them, the live status also shows the selected model and reasoning effort; Codex child-agent sessions are labeled **Subagent** when their rollout metadata identifies them. Agents that support lifecycle hooks can provide the same richer live states (`working`, `waiting`, `blocked`, and `done`), plus model, reasoning-effort, and optional subagent metadata, a project, and accurate session completion. The feature uses lifecycle and tool metadata only; it does not retain or upload prompts, responses, credentials, command arguments, file contents, or tool payloads.
 
 The default global shortcuts are `⌥⌘P` to show the pet and `⌥⇧⌘P` to hide it. They can be changed from **Desktop Pet → Pet Shortcuts**. Hiding the pet opens a reminder with the current show shortcut; **Show Now** re-enables it immediately, while **Don't Remind Me Again** suppresses future reminders.
 
@@ -199,10 +200,11 @@ The packaged executable accepts:
   --state working \
   --project "$PWD" \
   --model "GPT-5.6" \
+  --reasoning-effort high \
   --message "Running tests"
 ```
 
-Valid states include `working`, `waiting`, `blocked`, `done`, and `idle`. Append `--session`, `--tokens`, or `--requests` when the upstream hook makes those fields available. The exact example command for the current installation is also available in **Desktop Pet → Agent Hook Bridge**, where it can be copied. Hook configuration files are not rewritten automatically; install a hook only through the relevant agent's documented hook mechanism so unrelated user configuration remains untouched.
+Valid states include `working`, `waiting`, `blocked`, `done`, and `idle`. Append `--session`, `--tokens`, or `--requests` when the upstream hook makes those fields available. `--reasoning-effort` accepts the effort label reported by the agent (for example, `low`, `medium`, `high`, or `xhigh`); pass `--subagent` to mark a child-agent event from a hook. The exact example command for the current installation is also available in **Desktop Pet → Agent Hook Bridge**, where it can be copied. Hook configuration files are not rewritten automatically; install a hook only through the relevant agent's documented hook mechanism so unrelated user configuration remains untouched.
 
 A user-created pack directory has this minimum layout:
 

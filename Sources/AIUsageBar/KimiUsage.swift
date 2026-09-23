@@ -542,12 +542,13 @@ enum KimiQuotaService {
             ) {
                 metrics.append(fiveHour)
             }
-            if let weekly = rateLimit(
-                stats["ratelimitCode7d"] as? [String: Any],
-                key: "kimi-code-7d",
-                window: .weekly,
-                title: "Kimi Code · 7 天额度"
-            ) {
+            if !isNewPlanWithoutWeeklyQuota(planName),
+               let weekly = rateLimit(
+                    stats["ratelimitCode7d"] as? [String: Any],
+                    key: "kimi-code-7d",
+                    window: .weekly,
+                    title: "Kimi Code · 7 天额度"
+               ) {
                 metrics.append(weekly)
             }
         }
@@ -637,6 +638,17 @@ enum KimiQuotaService {
             resetAt: LocalData.date(object["resetTime"] ?? object["reset_time"]),
             note: "KIMI Desktop 官方接口 · Kimi Code 专属限额"
         )
+    }
+
+    /// Kimi's current plans (Go / Plus / Pro / Max / Ultra) no longer have
+    /// the legacy 7-day Kimi Code quota. Keep the metric for legacy plans and
+    /// unknown plan names so the UI follows the account's actual entitlement.
+    private static func isNewPlanWithoutWeeklyQuota(_ planName: String?) -> Bool {
+        guard let planName else { return false }
+        let planTokens = Set(
+            planName.lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        )
+        return !planTokens.isDisjoint(with: ["go", "plus", "pro", "max", "ultra"])
     }
 
     private static func string(_ object: [String: Any]?, keys: [String]) -> String? {

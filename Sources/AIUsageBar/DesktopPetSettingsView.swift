@@ -3,6 +3,7 @@ import SwiftUI
 
 struct DesktopPetSettingsSection: View {
     @ObservedObject private var pet = DesktopPetStore.shared
+    @ObservedObject private var languageSettings = AppLanguageSettings.shared
     @State private var idleMessage = ""
     @State private var workingMessage = ""
     @State private var waitingMessage = ""
@@ -14,7 +15,10 @@ struct DesktopPetSettingsSection: View {
         VStack(alignment: .leading, spacing: 14) {
             Toggle(
                 PetUI.text("显示桌面宠物", "Show desktop pet"),
-                isOn: boolBinding(get: { pet.preferences.isEnabled }, set: pet.setEnabled)
+                isOn: boolBinding(
+                    get: { pet.preferences.isEnabled && !pet.animationPhase.isLeaving },
+                    set: DesktopPetWindowController.shared.setPetEnabledFromSettings
+                )
             )
 
             HStack(spacing: 10) {
@@ -151,7 +155,7 @@ struct DesktopPetSettingsSection: View {
                 selection: stringBinding(get: { pet.preferences.selectedPackID }, set: pet.setSelectedPack)
             ) {
                 ForEach(pet.packs) { pack in
-                    Text(pack.name).tag(pack.id)
+                    Text(PetUI.packName(pack)).tag(pack.id)
                 }
             }
             HStack {
@@ -183,7 +187,7 @@ struct DesktopPetSettingsSection: View {
                                 Text(URL(fileURLWithPath: mapping.projectPath).lastPathComponent)
                                     .lineLimit(1)
                                 Spacer()
-                                Text(pet.packs.first(where: { $0.id == mapping.packID })?.name ?? "—")
+                                Text(pet.packs.first(where: { $0.id == mapping.packID }).map(PetUI.packName) ?? "—")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 Button(role: .destructive) {
@@ -281,7 +285,12 @@ struct DesktopPetSettingsSection: View {
                                     }
                                 }
                                 Spacer()
-                                Text(entry.endedAt, style: .relative)
+                                Text(
+                                    L10n.relativeDateString(
+                                        entry.endedAt,
+                                        language: languageSettings.language
+                                    )
+                                )
                                     .font(.system(size: 10, weight: .medium, design: .rounded))
                                     .foregroundStyle(.secondary)
                             }

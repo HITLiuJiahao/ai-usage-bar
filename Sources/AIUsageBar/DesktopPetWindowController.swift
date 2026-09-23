@@ -19,6 +19,10 @@ final class DesktopPetWindowController: NSObject {
     private var hideReminderObserver: Any?
     private var statsPopover: NSPopover?
     private var hotKeyController: DesktopPetHotKeyController?
+    private var petAnimationTask: Task<Void, Never>?
+    private var petAnimationGeneration = 0
+    private var animationHomeOrigin: NSPoint?
+    private var didResolveInitialVisibility = false
     /// Native mouse tracking deliberately keeps the drag path out of SwiftUI's
     /// animation/layout pipeline.  That makes the floating panel follow the
     /// pointer even while a provider snapshot or pet mood changes underneath it.
@@ -39,6 +43,12 @@ final class DesktopPetWindowController: NSObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.applyPreferences()
+            }
+            .store(in: &cancellables)
+        store.$activeSessions
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.resizePanelIfNeeded()
             }
             .store(in: &cancellables)
         AppLanguageSettings.shared.$language
@@ -102,17 +112,93 @@ final class DesktopPetWindowController: NSObject {
 
     func showPet() {
         createPanelIfNeeded()
+        guard let panel else { return }
+        let wasVisible = panel.isVisible
+        let wasAnimating = store.animationPhase != .idle
+        let restingOrigin = animationHomeOrigin ?? panel.frame.origin
+        cancelPetAnimation()
         store.setEnabled(true)
-        panel?.orderFrontRegardless()
+
+        if !wasVisible {
+            beginPetEntrance(panel, restingOrigin: panel.frame.origin)
+        } else if wasAnimating {
+            recoverPetToRestingPosition(panel, restingOrigin: restingOrigin)
+        } else {
+            panel.orderFrontRegardless()
+        }
+    }
+
+    func setPetEnabledFromSettings(_ enabled: Bool) {
+        if enabled {
+            showPet()
+        } else {
+            hidePet()
+        }
     }
 
     func hidePet() {
-        store.setEnabled(false)
+        guard store.preferences.isEnabled,
+              let panel,
+              panel.isVisible,
+              !store.animationPhase.isLeaving
+        else { return }
+
+        let restingOrigin = animationHomeOrigin ?? panel.frame.origin
+        cancelPetAnimation()
+        animationHomeOrigin = restingOrigin
+        statsPopover?.performClose(nil)
+
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            store.setAnimationPhase(.fadingOut)
+            let generation = petAnimationGeneration
+            petAnimationTask = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(nanoseconds: 180_000_000)
+                } catch {
+                    return
+                }
+                guard let self, self.petAnimationGeneration == generation, !Task.isCancelled else { return }
+                self.finishHidingPet(restingOrigin: restingOrigin)
+            }
+            return
+        }
+
+        let route = animationRoute(for: panel, restingOrigin: restingOrigin)
+        store.setAnimationPhase(.waving)
+        let generation = petAnimationGeneration
+        petAnimationTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 500_000_000)
+            } catch {
+                return
+            }
+            guard let self,
+                  self.petAnimationGeneration == generation,
+                  !Task.isCancelled,
+                  self.store.preferences.isEnabled
+            else { return }
+            self.store.setAnimationPhase(.running(route.edge))
+            self.animatePanel(
+                to: route.offscreenOrigin,
+                duration: 1.04,
+                timingFunction: .easeIn
+            )
+
+            do {
+                try await Task.sleep(nanoseconds: 1_040_000_000)
+            } catch {
+                return
+            }
+            guard self.petAnimationGeneration == generation,
+                  !Task.isCancelled,
+                  self.store.preferences.isEnabled
+            else { return }
+            self.finishHidingPet(restingOrigin: restingOrigin)
+        }
     }
 
     func showHUDFromSettings() {
-        createPanelIfNeeded()
-        store.setEnabled(true)
+        showPet()
         showHUD()
     }
 
@@ -120,6 +206,7 @@ final class DesktopPetWindowController: NSObject {
         UserDefaults.standard.removeObject(forKey: Self.positionKey)
         guard let panel else { return }
         let origin = defaultOrigin(for: panel.frame.size)
+        animationHomeOrigin = nil
         panel.setFrameOrigin(origin)
     }
 
@@ -146,6 +233,7 @@ final class DesktopPetWindowController: NSObject {
         guard let panel else { return }
         let origin = panel.frame.origin
         UserDefaults.standard.set([Double(origin.x), Double(origin.y)], forKey: Self.positionKey)
+        animationHomeOrigin = nil
         dragState = nil
     }
 
@@ -167,9 +255,11 @@ final class DesktopPetWindowController: NSObject {
         created.hidesOnDeactivate = false
         created.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         created.contentView = NSHostingView(
-            rootView: DesktopPetFloatingView(store: store, onShowHUD: { [weak self] in
-                self?.showHUD()
-            })
+            rootView: DesktopPetFloatingView(
+                store: store,
+                onShowHUD: { [weak self] in self?.showHUD() },
+                onHidePet: { [weak self] in self?.hidePet() }
+            )
         )
         panel = created
         if let saved = savedOrigin() {
@@ -180,9 +270,11 @@ final class DesktopPetWindowController: NSObject {
     private func refreshHostingView() {
         guard let panel else { return }
         panel.contentView = NSHostingView(
-            rootView: DesktopPetFloatingView(store: store, onShowHUD: { [weak self] in
-                self?.showHUD()
-            })
+            rootView: DesktopPetFloatingView(
+                store: store,
+                onShowHUD: { [weak self] in self?.showHUD() },
+                onHidePet: { [weak self] in self?.hidePet() }
+            )
         )
     }
 
@@ -190,17 +282,198 @@ final class DesktopPetWindowController: NSObject {
         createPanelIfNeeded()
         guard let panel else { return }
         resizePanelIfNeeded()
+
+        if !didResolveInitialVisibility {
+            didResolveInitialVisibility = true
+            if store.preferences.isEnabled {
+                beginPetEntrance(panel, restingOrigin: panel.frame.origin)
+            } else {
+                panel.orderOut(nil)
+            }
+            return
+        }
+
         if store.preferences.isEnabled {
-            panel.orderFrontRegardless()
+            if panel.isVisible {
+                panel.orderFrontRegardless()
+            } else {
+                beginPetEntrance(panel, restingOrigin: panel.frame.origin)
+            }
         } else {
             statsPopover?.performClose(nil)
             panel.orderOut(nil)
         }
     }
 
+    private func beginPetEntrance(_ panel: NSPanel, restingOrigin: NSPoint) {
+        cancelPetAnimation()
+        animationHomeOrigin = restingOrigin
+        let route = animationRoute(for: panel, restingOrigin: restingOrigin)
+
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            setPanelOriginImmediately(restingOrigin)
+            store.setAnimationPhase(.fadingIn)
+            panel.orderFrontRegardless()
+            let generation = petAnimationGeneration
+            petAnimationTask = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(nanoseconds: 180_000_000)
+                } catch {
+                    return
+                }
+                guard let self, self.petAnimationGeneration == generation, !Task.isCancelled else { return }
+                self.store.setAnimationPhase(.idle)
+                self.animationHomeOrigin = nil
+                self.petAnimationTask = nil
+            }
+            return
+        }
+
+        // Show at the saved location immediately so the user never has to
+        // search the screen for a pet traveling in from an unknown edge.
+        setPanelOriginImmediately(restingOrigin)
+        store.setAnimationPhase(.arriving(route.edge))
+        panel.orderFrontRegardless()
+
+        let generation = petAnimationGeneration
+        petAnimationTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 180_000_000)
+            } catch {
+                return
+            }
+            guard let self, self.petAnimationGeneration == generation, !Task.isCancelled else { return }
+            self.store.setAnimationPhase(.landing)
+
+            do {
+                try await Task.sleep(nanoseconds: 280_000_000)
+            } catch {
+                return
+            }
+            guard self.petAnimationGeneration == generation, !Task.isCancelled else { return }
+            self.store.setAnimationPhase(.idle)
+            self.animationHomeOrigin = nil
+            self.petAnimationTask = nil
+        }
+    }
+
+    private func recoverPetToRestingPosition(_ panel: NSPanel, restingOrigin: NSPoint) {
+        animationHomeOrigin = restingOrigin
+        store.setAnimationPhase(.recovering)
+        panel.orderFrontRegardless()
+
+        let duration: TimeInterval = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.18 : 0.36
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            setPanelOriginImmediately(restingOrigin)
+        } else {
+            animatePanel(to: restingOrigin, duration: duration, timingFunction: .easeOut)
+        }
+
+        let generation = petAnimationGeneration
+        petAnimationTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard let self, self.petAnimationGeneration == generation, !Task.isCancelled else { return }
+            self.setPanelOriginImmediately(restingOrigin)
+            self.store.setAnimationPhase(.idle)
+            self.animationHomeOrigin = nil
+            self.petAnimationTask = nil
+        }
+    }
+
+    private func finishHidingPet(restingOrigin: NSPoint) {
+        panel?.orderOut(nil)
+        setPanelOriginImmediately(restingOrigin)
+        animationHomeOrigin = nil
+        petAnimationTask = nil
+        store.setEnabled(false)
+        store.setAnimationPhase(.idle)
+    }
+
+    private func cancelPetAnimation() {
+        petAnimationGeneration &+= 1
+        petAnimationTask?.cancel()
+        petAnimationTask = nil
+    }
+
+    private func animatePanel(
+        to origin: NSPoint,
+        duration: TimeInterval,
+        timingFunction: CAMediaTimingFunctionName
+    ) {
+        guard let panel else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: timingFunction)
+            context.allowsImplicitAnimation = true
+            panel.animator().setFrameOrigin(origin)
+        }
+    }
+
+    private func animationRoute(for panel: NSPanel, restingOrigin: NSPoint) -> PetAnimationRoute {
+        let restingFrame = NSRect(origin: restingOrigin, size: panel.frame.size)
+        let screen = NSScreen.screens.max { lhs, rhs in
+            intersectionArea(lhs.visibleFrame, restingFrame) < intersectionArea(rhs.visibleFrame, restingFrame)
+        } ?? NSScreen.main ?? NSScreen.screens.first
+        let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1_440, height: 900)
+        let petSize = CGFloat(store.preferences.petSize)
+        let petCenterInPanel = NSPoint(x: restingFrame.width / 2, y: 8 + petSize / 2)
+        let petCenter = NSPoint(
+            x: restingFrame.minX + petCenterInPanel.x,
+            y: restingFrame.minY + petCenterInPanel.y
+        )
+        let edge = [
+            (DesktopPetScreenEdge.left, abs(petCenter.x - visibleFrame.minX)),
+            (DesktopPetScreenEdge.right, abs(visibleFrame.maxX - petCenter.x)),
+            (DesktopPetScreenEdge.top, abs(visibleFrame.maxY - petCenter.y)),
+            (DesktopPetScreenEdge.bottom, abs(petCenter.y - visibleFrame.minY))
+        ].min { $0.1 < $1.1 }?.0 ?? .right
+
+        let clearance = petSize * 0.68 + 20
+        var offscreenOrigin = restingOrigin
+        switch edge {
+        case .left:
+            offscreenOrigin.x = visibleFrame.minX - petCenterInPanel.x - clearance
+        case .right:
+            offscreenOrigin.x = visibleFrame.maxX - petCenterInPanel.x + clearance
+        case .top:
+            offscreenOrigin.y = visibleFrame.maxY - petCenterInPanel.y + clearance
+        case .bottom:
+            offscreenOrigin.y = visibleFrame.minY - petCenterInPanel.y - clearance
+        }
+        return PetAnimationRoute(edge: edge, offscreenOrigin: offscreenOrigin)
+    }
+
+    private func intersectionArea(_ lhs: NSRect, _ rhs: NSRect) -> CGFloat {
+        let intersection = lhs.intersection(rhs)
+        guard !intersection.isNull else { return 0 }
+        return intersection.width * intersection.height
+    }
+
     private var desiredSize: NSSize {
         let petSize = CGFloat(store.preferences.petSize)
-        return NSSize(width: max(236, petSize + 78), height: petSize + 122)
+        let activityBubbleHeight: CGFloat
+        let sessionCount = store.activeSessions.count
+        if store.preferences.showMessages, sessionCount > 0 {
+            let contentHeight = min(
+                PetAgentBubbleLayout.contentHeight(sessionCount: sessionCount),
+                PetAgentBubbleLayout.maximumContentHeight(for: petSize)
+            )
+            activityBubbleHeight = contentHeight + 20
+        } else {
+            activityBubbleHeight = 0
+        }
+
+        // The bubble is positioned above the pet inside this panel. Grow the
+        // panel upward as the bubble gains rows so AppKit does not clip its top.
+        let requiredBubbleSpace = activityBubbleHeight > 0 ? activityBubbleHeight + 24 : 122
+        return NSSize(
+            width: max(236, petSize + 78),
+            height: petSize + max(122, requiredBubbleSpace)
+        )
     }
 
     private func resizePanelIfNeeded() {
@@ -229,10 +502,14 @@ final class DesktopPetWindowController: NSObject {
         popover.behavior = .transient
         popover.animates = true
         popover.contentViewController = NSHostingController(
-            rootView: DesktopPetHUDView(store: store) {
-                popover.performClose(nil)
-                SettingsWindowController.shared.show()
-            }
+            rootView: DesktopPetHUDView(
+                store: store,
+                onOpenSettings: {
+                    popover.performClose(nil)
+                    SettingsWindowController.shared.show()
+                },
+                onHidePet: { [weak self] in self?.hidePet() }
+            )
         )
         statsPopover = popover
         popover.show(relativeTo: contentView.bounds, of: contentView, preferredEdge: .maxY)
@@ -317,4 +594,9 @@ final class DesktopPetWindowController: NSObject {
 private struct PetDragState {
     let panelOrigin: NSPoint
     let pointerOrigin: NSPoint
+}
+
+private struct PetAnimationRoute {
+    let edge: DesktopPetScreenEdge
+    let offscreenOrigin: NSPoint
 }

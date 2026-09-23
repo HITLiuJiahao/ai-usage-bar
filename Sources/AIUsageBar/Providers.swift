@@ -576,7 +576,7 @@ struct KimiProvider: UsageProvider {
         }
 
         if hasQuota {
-            messages.append("会员共享 Credits、Kimi Code 5 小时/7 天限额、套餐及重置时间来自 KIMI Desktop 使用的官方 MembershipService 接口；共享 Credits 由 Kimi 会员功能共用。成本按 Kimi API 公开 Token 价估算，不等同于会员 Credits 扣减。")
+            messages.append("会员共享 Credits、Kimi Code 5 小时限额及旧版套餐的 7 天限额、套餐和重置时间来自 KIMI Desktop 使用的官方 MembershipService 接口；Go / Plus / Pro / Max / Ultra 等新套餐不显示 7 天限额。共享 Credits 由 Kimi 会员功能共用。成本按 Kimi API 公开 Token 价估算，不等同于会员 Credits 扣减。")
         } else if hasKimiRoot {
             messages.append("已找到 KIMI Desktop，但官方会员额度暂未读取到；本地 Token、请求、模型和成本仍可显示。")
         } else {
@@ -808,9 +808,9 @@ struct DoubaoWorkProvider: UsageProvider {
             case .taskLedger:
                 message = "次数来自豆包工作本机聊天账本中的唯一工作任务消息；已排除会周期性重连的本地工具 SSE 通道。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
             case .networkRequests:
-                message = "次数来自豆包工作本机 Tea/SDK 的完成请求日志；已排除会周期性重连的本地工具 SSE 通道，并对镜像日志去重。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
+                message = "次数来自豆包工作本机 Tea 完成事件和 SDK 的 chat/completion 请求记录；已排除会周期性重连的本地工具 SSE 通道，并对镜像日志去重。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
             case .combined:
-                message = "次数来自豆包工作聊天模型用量记录与 Tea/SDK 完成请求日志；两类记录按自然日取较大值，避免镜像或缓存重复计数，同时补齐聊天记录未写入的当天请求。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
+                message = "次数来自豆包工作聊天模型用量记录、Tea 完成事件和 SDK 的 chat/completion 请求记录；两类记录按自然日取较大值，避免镜像或缓存重复计数，同时补齐聊天记录未写入的当天请求。当前日志未保存可可靠复原的 input/output Token，Token 与成本暂不估算。"
             case .none:
                 message = "已读取豆包工作本机日志，但当前没有可计数的工作任务。"
             }

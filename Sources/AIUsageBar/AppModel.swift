@@ -2,9 +2,11 @@ import Foundation
 import SwiftUI
 
 struct CodexStatusQuota {
-    /// The five-hour quota is the primary menu-bar number and ring.
+    /// The five-hour quota is the primary menu-bar number and ring when the
+    /// account has a five-hour bucket.
     let fiveHourRemaining: Int?
-    /// The weekly quota is shown as the five-dot secondary indicator.
+    /// The weekly quota becomes the primary value for plans without a
+    /// five-hour bucket; otherwise it is shown as the secondary indicator.
     let weeklyRemaining: Int?
 
     var primaryRemaining: Int {
@@ -13,6 +15,11 @@ struct CodexStatusQuota {
 
     var primaryWindow: UsageWindow {
         fiveHourRemaining == nil ? .weekly : .fiveHours
+    }
+
+    /// Do not draw the weekly value twice when it is already the primary ring.
+    var secondaryWeeklyRemaining: Int? {
+        fiveHourRemaining == nil ? nil : weeklyRemaining
     }
 }
 
@@ -166,11 +173,13 @@ final class UsageStore: ObservableObject {
     }
 
     /// Keep both Codex quota windows available to the menu bar. The five-hour
-    /// quota is the primary number/ring, while the weekly quota is the
-    /// secondary five-dot indicator. Plans without a five-hour bucket still
-    /// fall back to their weekly quota instead of going blank.
+    /// quota is the primary number/ring when the plan provides it, while the
+    /// weekly quota is the secondary indicator. Pro Lite has no five-hour
+    /// bucket, so its weekly value is the only value shown in the ring.
     var codexStatusQuota: CodexStatusQuota? {
-        let fiveHourRemaining = codexRemainingPercent(for: .fiveHours)
+        let fiveHourRemaining = codexIsProLite
+            ? nil
+            : codexRemainingPercent(for: .fiveHours)
         let weeklyRemaining = codexRemainingPercent(for: .weekly)
         guard fiveHourRemaining != nil || weeklyRemaining != nil else { return nil }
 
@@ -191,6 +200,16 @@ final class UsageStore: ObservableObject {
 
     private var codexAccounts: [AccountUsageSnapshot] {
         snapshots.first(where: { $0.provider == .codex })?.accounts ?? []
+    }
+
+    private var codexIsProLite: Bool {
+        codexAccounts.contains { account in
+            guard let planName = account.planName else { return false }
+            let normalized = planName
+                .filter { $0.isLetter || $0.isNumber }
+                .lowercased()
+            return normalized == "prolite"
+        }
     }
 
     private func quotaMetric(in account: AccountUsageSnapshot, window: UsageWindow) -> UsageMetric? {

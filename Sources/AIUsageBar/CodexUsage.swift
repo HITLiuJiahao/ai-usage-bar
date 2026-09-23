@@ -147,6 +147,11 @@ enum CodexPricing {
     // Local ~/.tokei pricing files are still loaded afterwards and can
     // override this built-in value when a user supplies a newer price.
     private static let astraPrice = Price(input: 10.0, output: 50.0, cacheRead: 1.0, cacheWrite: 12.50)
+    // GPT-6 Sol and Luna official OpenAI API Standard rates, in USD per
+    // million tokens. Their long-context rates use the same multipliers
+    // applied below for requests over 272K input tokens.
+    private static let gpt6SolPrice = Price(input: 2.0, output: 10.0, cacheRead: 0.20, cacheWrite: 2.50)
+    private static let gpt6LunaPrice = Price(input: 0.10, output: 0.50, cacheRead: 0.01, cacheWrite: 0.125)
     // GPT-5.6 Sol's current official API Standard rates, in USD per million
     // tokens. OpenAI documents cache writes as 1.25x the uncached input rate.
     private static let solPrice = Price(input: 4.0, output: 20.0, cacheRead: 0.4, cacheWrite: 5.0)
@@ -156,6 +161,8 @@ enum CodexPricing {
     // million input / output / cache-read tokens for MiniMax M3.
     private static let builtInProviderPrices: [String: Price] = [
         "openai/gpt-6-astra": astraPrice,
+        "openai/gpt-6-sol": gpt6SolPrice,
+        "openai/gpt-6-luna": gpt6LunaPrice,
         "openai/gpt-5.6-sol": solPrice,
         "minimax/minimax-m3": Price(input: 0.30, output: 1.20, cacheRead: 0.06),
         "minimax/minimax-m2.7": Price(input: 0.30, output: 1.20, cacheRead: 0.06),
@@ -207,7 +214,7 @@ enum CodexPricing {
     // Include the pricing algorithm and long-context threshold in the
     // version. A future formula change therefore revalues existing cached
     // events even when the local pricing file itself did not change.
-    private static let pricingRevision = "codex-pricing-v3-long-context-272k"
+    private static let pricingRevision = "codex-pricing-v4-hy4-alias-long-context-272k"
     private static let longContextThreshold = 272_000
     private static let pricingLock = NSLock()
     private static var pricingCatalog = makePricingCatalog()
@@ -260,6 +267,12 @@ enum CodexPricing {
             "kimi/k3-agent-swarm": "moonshotai/kimi-k3",
             "hy3": "tencent/hy3",
             "hy3-preview": "tencent/hy3-preview",
+            // WorkBuddy may report Hy4 without the preview suffix or provider
+            // prefix. Tencent's currently published Hy4 model is Hy4 preview,
+            // so resolve all of these forms to its canonical price row.
+            "hy4": "tencent/hy4-preview",
+            "tencent/hy4": "tencent/hy4-preview",
+            "hy4-preview": "tencent/hy4-preview",
             "qwen/qwen3.8-max": "qwen3.8-max",
             "qwen/qwen3.8-max-preview": "qwen3.8-max-preview",
             "deepseek/deepseek-v4-flash": "deepseek-v4-flash",
@@ -316,6 +329,8 @@ enum CodexPricing {
         // allowing an explicit pricing_overrides.json entry to opt in to a
         // custom value.
         models["openai/gpt-6-astra"] = astraPrice
+        models["openai/gpt-6-sol"] = gpt6SolPrice
+        models["openai/gpt-6-luna"] = gpt6LunaPrice
         models["openai/gpt-5.6-sol"] = solPrice
         loadOverrides(from: homeOverrides)
         let sourceSignature = suppliedSignature ?? currentPricingSourceSignature()
@@ -531,6 +546,12 @@ enum CodexPricing {
         if value == "hy3-preview" {
             return "tencent/hy3-preview"
         }
+        if value == "hy4" || value == "tencent/hy4" {
+            return "tencent/hy4-preview"
+        }
+        if value == "hy4-preview" || value == "tencent/hy4-preview" {
+            return "tencent/hy4-preview"
+        }
         if value.hasPrefix("minimax/") {
             let suffix = String(value.dropFirst("minimax/".count))
             return suffix.hasPrefix("minimax-")
@@ -637,6 +658,7 @@ enum CodexUsageScanner {
         let size: Int64
         let modifiedAt: Double
         let sessionID: String?
+        let threadID: String?
         let forkedFromID: String?
         let events: [CodexEvent]
         let latestQuota: CodexQuotaSnapshot?
@@ -671,12 +693,13 @@ enum CodexUsageScanner {
         let recognizedEventCount: Int
     }
 
-    // Version 4 rebuilds the event cache after fixing incremental overlap
-    // matching. Older entries may contain the same token_count event more
-    // than once when the pricing catalog changed between refreshes.
-    private static let cacheVersion = 4
+    // Version 5 keeps the actual thread identity in each rollout entry.
+    // Codex can continue one root session across several files; treating the
+    // root session ID as the file identity would discard a newer continuation
+    // when an older file happens to contain more events.
+    private static let cacheVersion = 5
     private static let cacheURL = AppPaths.appSupport.appendingPathComponent("codex-scan-cache.json")
-    private static let summaryCacheVersion = 2
+    private static let summaryCacheVersion = 3
     private static let summaryCacheURL = AppPaths.appSupport.appendingPathComponent("codex-summary-cache.json")
     private static let incrementalOverlapBytes: Int64 = 2 * 1024 * 1024
     private static let tokenMarker = Data("\"token_count\"".utf8)
@@ -819,6 +842,7 @@ enum CodexUsageScanner {
             size: size,
             modifiedAt: modifiedAt,
             sessionID: tail.sessionID ?? previous.sessionID,
+            threadID: tail.threadID ?? previous.threadID,
             forkedFromID: tail.forkedFromID ?? previous.forkedFromID,
             events: events,
             latestQuota: tail.latestQuota ?? previous.latestQuota
@@ -895,6 +919,7 @@ enum CodexUsageScanner {
             size: entry.size,
             modifiedAt: entry.modifiedAt,
             sessionID: entry.sessionID,
+            threadID: entry.threadID,
             forkedFromID: entry.forkedFromID,
             events: events,
             latestQuota: entry.latestQuota
@@ -951,6 +976,7 @@ enum CodexUsageScanner {
         initial: FileEntry? = nil
     ) -> FileEntry {
         var sessionID = initial?.sessionID
+        let threadID = initial?.threadID
         var forkedFromID = initial?.forkedFromID
         var currentModel = initial?.events.last?.model
         var previousTotalKey = initial?.events.last?.totalKey
@@ -971,6 +997,10 @@ enum CodexUsageScanner {
                 if sessionID == nil { sessionID = metaID }
                 if forkedFromID == nil {
                     forkedFromID = LocalData.string(payload["forked_from_id"] ?? payload["parent_thread_id"])
+                    if forkedFromID == nil,
+                       let historyBase = payload["history_base"] as? [String: Any] {
+                        forkedFromID = LocalData.string(historyBase["thread_id"])
+                    }
                     if forkedFromID == nil,
                        let source = payload["source"] as? [String: Any],
                        let subagent = source["subagent"] as? [String: Any],
@@ -1060,6 +1090,7 @@ enum CodexUsageScanner {
             size: size,
             modifiedAt: modifiedAt,
             sessionID: sessionID,
+            threadID: threadID ?? rolloutThreadID(for: url, sessionID: sessionID),
             forkedFromID: forkedFromID,
             events: events,
             latestQuota: latestQuota
@@ -1156,11 +1187,25 @@ enum CodexUsageScanner {
             && lhs.model == rhs.model
     }
 
+    private static func rolloutThreadID(for url: URL, sessionID: String?) -> String? {
+        let filename = url.deletingPathExtension().lastPathComponent
+        guard let sessionID,
+              let range = filename.range(of: sessionID) else {
+            return sessionID
+        }
+        let suffix = filename[range.upperBound...]
+        guard suffix.first == "_" else { return sessionID }
+        let threadID = suffix.dropFirst()
+        return threadID.isEmpty ? sessionID : String(threadID)
+    }
+
     private static func canonicalEntries(_ entries: [String: FileEntry]) -> [String: FileEntry] {
         var selected: [String: (score: (Int, Double, Int64), path: String)] = [:]
         var result: [String: FileEntry] = [:]
         for (path, entry) in entries {
-            let logicalID = entry.sessionID.map { "session:\($0)" } ?? "rollout:\(URL(fileURLWithPath: path).lastPathComponent)"
+            let logicalID = entry.threadID.map { "thread:\($0)" }
+                ?? entry.sessionID.map { "session:\($0)" }
+                ?? "rollout:\(URL(fileURLWithPath: path).lastPathComponent)"
             let score = (entry.events.count, entry.events.last?.timestamp ?? 0, entry.size)
             if let existing = selected[logicalID], score <= existing.score { continue }
             if let existing = selected[logicalID] { result.removeValue(forKey: existing.path) }
@@ -1177,8 +1222,9 @@ enum CodexUsageScanner {
     ) -> Int {
         var best = 0
         if let parentID = entry.forkedFromID,
-           let parent = entries.first(where: { $0.value.sessionID == parentID }) {
-            best = prefixMatch(entry.events, parent.value.events)
+           let parent = entries.values.first(where: { $0.threadID == parentID })
+                ?? entries.values.first(where: { $0.sessionID == parentID }) {
+            best = prefixMatch(entry.events, parent.events)
         }
 
         if best == 0, entry.events.count >= 2,
