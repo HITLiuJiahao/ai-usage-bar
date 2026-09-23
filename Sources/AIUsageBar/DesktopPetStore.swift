@@ -20,6 +20,33 @@ enum DesktopPetMood: String, Codable, CaseIterable {
     case resting
 }
 
+enum DesktopPetScreenEdge: Equatable {
+    case left
+    case right
+    case top
+    case bottom
+}
+
+enum DesktopPetAnimationPhase: Equatable {
+    case idle
+    case arriving(DesktopPetScreenEdge)
+    case landing
+    case waving
+    case running(DesktopPetScreenEdge)
+    case recovering
+    case fadingIn
+    case fadingOut
+
+    var isLeaving: Bool {
+        switch self {
+        case .waving, .running, .fadingOut:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 enum DesktopPetAchievement: String, Codable, CaseIterable, Hashable, Identifiable {
     case firstSession
     case sessions10
@@ -64,6 +91,9 @@ struct PetPack: Codable, Identifiable, Hashable {
     static let catPackID = "aiusagebar-cat"
     static let bearPackID = "aiusagebar-bear"
     static let foxPackID = "aiusagebar-fox"
+    static let succulentPackID = "aiusagebar-succulent"
+    static let sunflowerPackID = "aiusagebar-sunflower"
+    static let monsteraPackID = "aiusagebar-monstera"
     static let defaultPackID = catPackID
 
     let id: String
@@ -75,44 +105,76 @@ struct PetPack: Codable, Identifiable, Hashable {
     static let catPack = PetPack(
         id: catPackID,
         name: "Cat",
-        spritePath: "pet-cat-sprite.png",
-        columns: 4,
+        spritePath: "pet-cat-work-sprite.png",
+        columns: 6,
         bundled: true
     )
 
     static let bearPack = PetPack(
         id: bearPackID,
         name: "Bear",
-        spritePath: "pet-bear-sprite.png",
-        columns: 4,
+        spritePath: "pet-bear-work-sprite-upright.png",
+        columns: 6,
         bundled: true
     )
 
     static let foxPack = PetPack(
         id: foxPackID,
         name: "Fox",
-        spritePath: "pet-fox-sprite.png",
-        columns: 4,
+        spritePath: "pet-fox-work-sprite.png",
+        columns: 6,
         bundled: true
     )
 
-    static let legacyDefaultPack = PetPack(
-        id: legacyDefaultPackID,
-        name: "Orbit",
-        spritePath: "usage-orb-sprite.png",
-        columns: 4,
+    static let succulentPack = PetPack(
+        id: succulentPackID,
+        name: "Succulent",
+        spritePath: "pet-succulent-sprite.png",
+        columns: 6,
         bundled: true
     )
 
-    static let bundledPacks = [catPack, bearPack, foxPack, legacyDefaultPack]
+    static let sunflowerPack = PetPack(
+        id: sunflowerPackID,
+        name: "Sunflower",
+        spritePath: "pet-sunflower-sprite.png",
+        columns: 6,
+        bundled: true
+    )
+
+    static let monsteraPack = PetPack(
+        id: monsteraPackID,
+        name: "Monstera",
+        spritePath: "pet-monstera-sprite.png",
+        columns: 6,
+        bundled: true
+    )
+
+    static let bundledPacks = [catPack, bearPack, foxPack, succulentPack, sunflowerPack, monsteraPack]
     static let defaultPack = catPack
 
-    func frameIndex(for mood: DesktopPetMood) -> Int {
+    var supportsWorkingAnimation: Bool {
+        bundled && [
+            Self.catPackID,
+            Self.bearPackID,
+            Self.foxPackID,
+            Self.succulentPackID,
+            Self.sunflowerPackID,
+            Self.monsteraPackID
+        ].contains(id) && columns >= 6
+    }
+
+    func frameIndex(for mood: DesktopPetMood, animationFrame: Int = 0) -> Int {
         switch mood {
         case .idle, .resting: return 0
-        case .working: return min(1, max(columns - 1, 0))
-        case .waiting, .blocked: return min(2, max(columns - 1, 0))
-        case .celebrating: return min(3, max(columns - 1, 0))
+        case .working:
+            let firstWorkingFrame = 1
+            let workingFrameCount = supportsWorkingAnimation ? 3 : 1
+            return min(firstWorkingFrame + max(animationFrame, 0) % workingFrameCount, max(columns - 1, 0))
+        case .waiting, .blocked:
+            return min(supportsWorkingAnimation ? 4 : 2, max(columns - 1, 0))
+        case .celebrating:
+            return min(supportsWorkingAnimation ? 5 : 3, max(columns - 1, 0))
         }
     }
 }
@@ -220,6 +282,8 @@ struct PetHookEvent: Codable, Hashable {
     var sessionID: String?
     var message: String?
     var model: String?
+    var reasoningEffort: String? = nil
+    var isSubagent: Bool? = nil
     var tokens: Double?
     var requests: Double?
     var timestamp: Date?
@@ -234,6 +298,8 @@ struct PetActiveAgentSession: Codable, Identifiable, Hashable {
     var projectPath: String?
     var message: String?
     var model: String?
+    var reasoningEffort: String? = nil
+    var isSubagent: Bool? = nil
     var mood: DesktopPetMood
     var createdAt: Date
     var stateSince: Date
@@ -344,6 +410,7 @@ final class DesktopPetStore: ObservableObject {
     @Published private(set) var packs: [PetPack]
     @Published private(set) var projectMappings: [PetProjectMapping]
     @Published private(set) var mood: DesktopPetMood = .idle
+    @Published private(set) var animationPhase: DesktopPetAnimationPhase = .idle
     @Published private(set) var speech: String = ""
     @Published private(set) var activeProvider: ProviderID?
     @Published private(set) var activeProjectPath: String?
@@ -367,16 +434,36 @@ final class DesktopPetStore: ObservableObject {
     private init() {
         let saved = Self.loadSavedState()
         var loadedPreferences = saved.preferences
+        var migratedLegacyDefault = false
         var loadedPacks = saved.packs.isEmpty ? PetPack.bundledPacks : saved.packs
-        for bundledPack in PetPack.bundledPacks where !loadedPacks.contains(where: { $0.id == bundledPack.id }) {
-            loadedPacks.append(bundledPack)
+        let packCountBeforeLegacyRemoval = loadedPacks.count
+        loadedPacks.removeAll(where: { $0.id == PetPack.legacyDefaultPackID })
+        if loadedPacks.count != packCountBeforeLegacyRemoval {
+            migratedLegacyDefault = true
+        }
+        for bundledPack in PetPack.bundledPacks {
+            if let index = loadedPacks.firstIndex(where: { $0.id == bundledPack.id }) {
+                if loadedPacks[index].bundled {
+                    loadedPacks[index] = bundledPack
+                }
+            } else {
+                loadedPacks.append(bundledPack)
+                migratedLegacyDefault = true
+            }
         }
 
-        var migratedLegacyDefault = false
-        if loadedPreferences.selectedPackID == PetPack.legacyDefaultPackID,
-           !UserDefaults.standard.bool(forKey: Self.animalPackMigrationKey) {
+        if loadedPreferences.selectedPackID == PetPack.legacyDefaultPackID {
             loadedPreferences.selectedPackID = PetPack.catPackID
             migratedLegacyDefault = true
+        }
+        let loadedProjectMappings = saved.projectMappings.map { mapping in
+            guard mapping.packID == PetPack.legacyDefaultPackID else { return mapping }
+            migratedLegacyDefault = true
+            return PetProjectMapping(
+                id: mapping.id,
+                projectPath: mapping.projectPath,
+                packID: PetPack.catPackID
+            )
         }
         UserDefaults.standard.set(true, forKey: Self.animalPackMigrationKey)
         if !loadedPacks.contains(where: { $0.id == loadedPreferences.selectedPackID }) {
@@ -389,7 +476,7 @@ final class DesktopPetStore: ObservableObject {
         history = saved.history
         achievements = saved.achievements
         packs = loadedPacks
-        projectMappings = saved.projectMappings
+        projectMappings = loadedProjectMappings
         showPetShortcut = Self.loadPetShortcut(
             forKey: "AIUsageBar.desktopPet.showShortcut",
             fallback: .defaultShow
@@ -469,6 +556,10 @@ final class DesktopPetStore: ObservableObject {
                 object: nil
             )
         }
+    }
+
+    func setAnimationPhase(_ phase: DesktopPetAnimationPhase) {
+        animationPhase = phase
     }
 
     func setShowMessages(_ enabled: Bool) {
@@ -666,6 +757,9 @@ final class DesktopPetStore: ObservableObject {
             activeSessions[index].projectPath = event.projectPath ?? activeSessions[index].projectPath
             activeSessions[index].message = event.message ?? activeSessions[index].message
             activeSessions[index].model = event.model ?? activeSessions[index].model
+            activeSessions[index].reasoningEffort = event.reasoningEffort
+                ?? activeSessions[index].reasoningEffort
+            activeSessions[index].isSubagent = event.isSubagent ?? activeSessions[index].isSubagent
             activeSessions[index].mood = mood
             activeSessions[index].updatedAt = now
             if stateChanged { activeSessions[index].stateSince = now }
@@ -676,6 +770,8 @@ final class DesktopPetStore: ObservableObject {
                 projectPath: event.projectPath,
                 message: event.message,
                 model: event.model,
+                reasoningEffort: event.reasoningEffort,
+                isSubagent: event.isSubagent,
                 mood: mood,
                 createdAt: now,
                 stateSince: now,
@@ -1083,6 +1179,8 @@ final class DesktopPetStore: ObservableObject {
             sessionID: activity.id,
             message: state == "working" ? activity.action.map(PetUI.codexAction) : nil,
             model: activity.model,
+            reasoningEffort: activity.reasoningEffort,
+            isSubagent: activity.isSubagent,
             tokens: nil,
             requests: nil,
             timestamp: activity.updatedAt

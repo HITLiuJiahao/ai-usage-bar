@@ -576,7 +576,7 @@ struct KimiProvider: UsageProvider {
         }
 
         if hasQuota {
-            messages.append("会员共享 Credits、Kimi Code 5 小时/7 天限额、套餐及重置时间来自 KIMI Desktop 使用的官方 MembershipService 接口；共享 Credits 由 Kimi 会员功能共用。成本按 Kimi API 公开 Token 价估算，不等同于会员 Credits 扣减。")
+            messages.append("会员共享 Credits、Kimi Code 5 小时限额及旧版套餐的 7 天限额、套餐和重置时间来自 KIMI Desktop 使用的官方 MembershipService 接口；Go / Plus / Pro / Max / Ultra 等新套餐不显示 7 天限额。共享 Credits 由 Kimi 会员功能共用。成本按 Kimi API 公开 Token 价估算，不等同于会员 Credits 扣减。")
         } else if hasKimiRoot {
             messages.append("已找到 KIMI Desktop，但官方会员额度暂未读取到；本地 Token、请求、模型和成本仍可显示。")
         } else {

@@ -15,7 +15,10 @@ struct DesktopPetSettingsSection: View {
         VStack(alignment: .leading, spacing: 14) {
             Toggle(
                 PetUI.text("显示桌面宠物", "Show desktop pet"),
-                isOn: boolBinding(get: { pet.preferences.isEnabled }, set: pet.setEnabled)
+                isOn: boolBinding(
+                    get: { pet.preferences.isEnabled && !pet.animationPhase.isLeaving },
+                    set: DesktopPetWindowController.shared.setPetEnabledFromSettings
+                )
             )
 
             HStack(spacing: 10) {

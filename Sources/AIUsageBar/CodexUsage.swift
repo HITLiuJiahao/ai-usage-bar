@@ -147,6 +147,11 @@ enum CodexPricing {
     // Local ~/.tokei pricing files are still loaded afterwards and can
     // override this built-in value when a user supplies a newer price.
     private static let astraPrice = Price(input: 10.0, output: 50.0, cacheRead: 1.0, cacheWrite: 12.50)
+    // GPT-6 Sol and Luna official OpenAI API Standard rates, in USD per
+    // million tokens. Their long-context rates use the same multipliers
+    // applied below for requests over 272K input tokens.
+    private static let gpt6SolPrice = Price(input: 2.0, output: 10.0, cacheRead: 0.20, cacheWrite: 2.50)
+    private static let gpt6LunaPrice = Price(input: 0.10, output: 0.50, cacheRead: 0.01, cacheWrite: 0.125)
     // GPT-5.6 Sol's current official API Standard rates, in USD per million
     // tokens. OpenAI documents cache writes as 1.25x the uncached input rate.
     private static let solPrice = Price(input: 4.0, output: 20.0, cacheRead: 0.4, cacheWrite: 5.0)
@@ -156,6 +161,8 @@ enum CodexPricing {
     // million input / output / cache-read tokens for MiniMax M3.
     private static let builtInProviderPrices: [String: Price] = [
         "openai/gpt-6-astra": astraPrice,
+        "openai/gpt-6-sol": gpt6SolPrice,
+        "openai/gpt-6-luna": gpt6LunaPrice,
         "openai/gpt-5.6-sol": solPrice,
         "minimax/minimax-m3": Price(input: 0.30, output: 1.20, cacheRead: 0.06),
         "minimax/minimax-m2.7": Price(input: 0.30, output: 1.20, cacheRead: 0.06),
@@ -322,6 +329,8 @@ enum CodexPricing {
         // allowing an explicit pricing_overrides.json entry to opt in to a
         // custom value.
         models["openai/gpt-6-astra"] = astraPrice
+        models["openai/gpt-6-sol"] = gpt6SolPrice
+        models["openai/gpt-6-luna"] = gpt6LunaPrice
         models["openai/gpt-5.6-sol"] = solPrice
         loadOverrides(from: homeOverrides)
         let sourceSignature = suppliedSignature ?? currentPricingSourceSignature()

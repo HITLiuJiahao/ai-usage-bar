@@ -80,8 +80,12 @@ enum PetUI {
             return text("小熊", "Bear")
         case PetPack.foxPackID:
             return text("小狐狸", "Fox")
-        case PetPack.legacyDefaultPackID:
-            return text("Orbit", "Orbit")
+        case PetPack.succulentPackID:
+            return text("多肉", "Succulent", "多肉植物", "다육이")
+        case PetPack.sunflowerPackID:
+            return text("向日葵", "Sunflower", "ひまわり", "해바라기")
+        case PetPack.monsteraPackID:
+            return text("龟背竹", "Monstera", "モンステラ", "몬스테라")
         default:
             return pack.name
         }
@@ -105,6 +109,21 @@ enum PetUI {
             return text("正在调用工具", "Calling a tool", "ツールを呼び出し中", "도구 호출 중")
         case .waitingForInput:
             return text("正在等待输入", "Waiting for input", "入力を待機中", "입력 대기 중")
+        }
+    }
+
+    static func reasoningEffort(_ effort: String) -> String {
+        switch effort.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            .replacingOccurrences(of: "_", with: "-") {
+        case "none": return text("無", "None", "なし", "없음")
+        case "minimal", "min": return text("最低", "Minimal", "最小", "최소")
+        case "low": return text("低", "Low", "低", "낮음")
+        case "medium", "med": return text("中", "Medium", "中", "중간")
+        case "high": return text("高", "High", "高", "높음")
+        case "xhigh", "extra-high": return text("超高", "XHigh", "超高", "매우 높음")
+        case "max": return text("最高", "Max", "最大", "최대")
+        case "ultra": return text("極高", "Ultra", "極高", "매우 높음")
+        default: return effort.capitalized
         }
     }
 
@@ -162,36 +181,52 @@ struct DesktopPetSpriteView: View {
     let mood: DesktopPetMood
     let size: CGFloat
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         Group {
-            if let image = Self.frameImage(for: pack, mood: mood) {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
+            if pack.supportsWorkingAnimation && mood == .working && !reduceMotion {
+                TimelineView(.periodic(from: Date(), by: 0.5)) { context in
+                    spriteImage(animationFrame: Int(context.date.timeIntervalSinceReferenceDate / 0.5))
+                }
             } else {
-                Image(systemName: "pawprint.fill")
-                    .resizable()
-                    .scaledToFit()
-                    .padding(size * 0.25)
-                    .foregroundStyle(.cyan)
+                spriteImage(animationFrame: 0)
             }
         }
         .frame(width: size, height: size)
         .accessibilityLabel(PetUI.packName(pack))
     }
 
+    @ViewBuilder
+    private func spriteImage(animationFrame: Int) -> some View {
+        if let image = Self.frameImage(for: pack, mood: mood, animationFrame: animationFrame) {
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+        } else {
+            Image(systemName: "pawprint.fill")
+                .resizable()
+                .scaledToFit()
+                .padding(size * 0.25)
+                .foregroundStyle(.cyan)
+        }
+    }
+
     private static var sourceImageCache: [String: NSImage] = [:]
     private static var frameImageCache: [String: NSImage] = [:]
 
-    private static func frameImage(for pack: PetPack, mood: DesktopPetMood) -> NSImage? {
-        let key = "\(pack.id)-\(pack.spritePath)-\(pack.columns)-\(mood.rawValue)"
+    private static func frameImage(for pack: PetPack, mood: DesktopPetMood, animationFrame: Int = 0) -> NSImage? {
+        let spritePath = spritePath(for: pack, mood: mood)
+        let key = "\(pack.id)-\(spritePath)-\(pack.columns)-\(mood.rawValue)-\(animationFrame)"
         if let cached = frameImageCache[key] { return cached }
-        guard let image = sourceImage(for: pack), image.size.width > 0, image.size.height > 0 else {
+        guard let image = sourceImage(for: pack, spritePath: spritePath),
+              image.size.width > 0,
+              image.size.height > 0 else {
             return nil
         }
         let columns = max(pack.columns, 1)
-        let frame = pack.frameIndex(for: mood)
+        let frame = pack.frameIndex(for: mood, animationFrame: animationFrame)
         let width = image.size.width / CGFloat(columns)
         let source = NSRect(
             x: min(CGFloat(frame) * width, max(image.size.width - width, 0)),
@@ -214,15 +249,24 @@ struct DesktopPetSpriteView: View {
         return cropped
     }
 
-    private static func sourceImage(for pack: PetPack) -> NSImage? {
-        let key = "\(pack.id)-\(pack.spritePath)"
+    private static func spritePath(for pack: PetPack, mood: DesktopPetMood) -> String {
+        // The work sheet's celebration pose still has a laptop; use the
+        // original no-computer celebration pose for the cat instead.
+        if pack.bundled, pack.id == PetPack.catPackID, mood == .celebrating {
+            return "pet-cat-sprite.png"
+        }
+        return pack.spritePath
+    }
+
+    private static func sourceImage(for pack: PetPack, spritePath: String) -> NSImage? {
+        let key = "\(pack.id)-\(spritePath)"
         if let cached = sourceImageCache[key] { return cached }
         let url: URL?
         if pack.bundled {
-            let resource = (pack.spritePath as NSString).deletingPathExtension
+            let resource = (spritePath as NSString).deletingPathExtension
             url = Bundle.main.url(forResource: resource, withExtension: "png", subdirectory: "Pets")
         } else {
-            url = URL(fileURLWithPath: pack.spritePath)
+            url = URL(fileURLWithPath: spritePath)
         }
         guard let url, let image = NSImage(contentsOf: url) else { return nil }
         sourceImageCache[key] = image
@@ -233,10 +277,13 @@ struct DesktopPetSpriteView: View {
 struct DesktopPetFloatingView: View {
     @ObservedObject var store: DesktopPetStore
     let onShowHUD: () -> Void
+    let onHidePet: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
     @State private var isDragging = false
     @State private var showHearts = false
+    @State private var farewellWaveTilt = 0.0
 
     private var petSize: CGFloat { CGFloat(store.preferences.petSize) }
     private var showsBubble: Bool {
@@ -249,29 +296,215 @@ struct DesktopPetFloatingView: View {
         // from moving the pet out from under the pointer, which previously
         // caused an enter/exit loop and a visibly flashing bubble.
         ZStack(alignment: .bottom) {
-            petBody
+            animatedPet
 
-            if showsBubble {
-                bubbleBody
+            if store.animationPhase == .waving {
+                PetSpeechBubble(text: PetUI.text("我先回窝啦，下次见！", "See you soon!"))
                     .allowsHitTesting(false)
+                    .offset(y: -(petSize + 8))
+                    .transition(.scale(scale: 0.88, anchor: .bottom).combined(with: .opacity))
+            } else if showsBubble && store.animationPhase == .idle {
+                bubbleBody
                     .offset(y: -(petSize + 8))
                     .transition(.scale(scale: 0.88, anchor: .bottom).combined(with: .opacity))
             }
         }
+        .animation(petAnimation, value: store.animationPhase)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(8)
         .opacity(store.preferences.opacity)
         .animation(.spring(response: 0.3, dampingFraction: 0.68), value: store.mood)
         .animation(.easeInOut(duration: 0.18), value: hovering)
+        .task(id: store.animationPhase == .waving) {
+            guard store.animationPhase == .waving else {
+                farewellWaveTilt = 0
+                return
+            }
+
+            withAnimation(.easeInOut(duration: 0.16)) {
+                farewellWaveTilt = 6
+            }
+            do {
+                try await Task.sleep(nanoseconds: 160_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.16)) {
+                farewellWaveTilt = 0
+            }
+        }
         .accessibilityElement(children: .contain)
+    }
+
+    private var runningEdge: DesktopPetScreenEdge? {
+        guard case let .running(edge) = store.animationPhase else { return nil }
+        return edge
+    }
+
+    private var animatedPet: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: runningEdge == nil || reduceMotion)) { context in
+            let gait = runningEdge == nil || reduceMotion
+                ? 0
+                : sin(context.date.timeIntervalSinceReferenceDate * 17)
+            let bounce = CGFloat(abs(gait))
+
+            ZStack {
+                if !reduceMotion, store.animationPhase == .landing {
+                    PetLandingPuff()
+                        .offset(y: petSize * 0.42)
+                        .allowsHitTesting(false)
+                }
+
+                petBody
+                    .frame(width: petSize, height: petSize)
+                    .scaleEffect(
+                        x: petScale.width,
+                        y: petScale.height + bounce * 0.045,
+                        anchor: .bottom
+                    )
+                    .rotationEffect(.degrees(petRotation + waveRotation + gait * 4), anchor: .bottom)
+                    .offset(x: petOffset.width, y: petOffset.height - bounce * 4)
+                    .opacity(petOpacity)
+                    .animation(petAnimation, value: store.animationPhase)
+                    .allowsHitTesting(store.animationPhase == .idle)
+
+                if !reduceMotion, let edge = runningEdge {
+                    PetMotionTrail(edge: edge)
+                        .offset(trailAnchorOffset(for: edge))
+                        .allowsHitTesting(false)
+                }
+            }
+        }
+        .frame(width: petSize, height: petSize)
+    }
+
+    private var petScale: CGSize {
+        switch store.animationPhase {
+        case .arriving:
+            return CGSize(width: 0.94, height: 0.94)
+        case .landing:
+            return CGSize(width: 1.08, height: 0.88)
+        case .waving:
+            return CGSize(width: 1.04, height: 1.04)
+        case .running:
+            return CGSize(width: 1.04, height: 0.94)
+        case .recovering:
+            return CGSize(width: 0.98, height: 1.02)
+        case .fadingIn, .fadingOut:
+            return CGSize(width: 0.98, height: 0.98)
+        case .idle:
+            return CGSize(width: 1, height: 1)
+        }
+    }
+
+    private var petRotation: Double {
+        switch store.animationPhase {
+        case .arriving(let edge):
+            return edge == .left ? -5 : edge == .right ? 5 : 0
+        case .landing:
+            return 0
+        case .waving:
+            return 0
+        case .running(let edge):
+            switch edge {
+            case .left: return -7
+            case .right: return 7
+            case .top, .bottom: return 0
+            }
+        case .recovering, .fadingIn, .fadingOut, .idle:
+            return 0
+        }
+    }
+
+    private var petOffset: CGSize {
+        switch store.animationPhase {
+        case .arriving(let edge):
+            switch edge {
+            case .left, .right: return .zero
+            case .top: return CGSize(width: 0, height: 4)
+            case .bottom: return CGSize(width: 0, height: -4)
+            }
+        case .landing:
+            return CGSize(width: 0, height: -5)
+        case .waving:
+            return CGSize(width: 0, height: -3)
+        case .running(let edge):
+            switch edge {
+            case .left: return CGSize(width: -3, height: 0)
+            case .right: return CGSize(width: 3, height: 0)
+            case .top: return CGSize(width: 0, height: -3)
+            case .bottom: return CGSize(width: 0, height: 3)
+            }
+        case .recovering, .fadingIn, .fadingOut, .idle:
+            return .zero
+        }
+    }
+
+    private var petOpacity: Double {
+        switch store.animationPhase {
+        case .fadingIn: return 0
+        case .fadingOut: return 0
+        default: return 1
+        }
+    }
+
+    private var petAnimation: Animation {
+        if reduceMotion {
+            return .easeOut(duration: 0.18)
+        }
+        switch store.animationPhase {
+        case .arriving:
+            return .easeOut(duration: 0.18)
+        case .landing:
+            return .spring(response: 0.28, dampingFraction: 0.43)
+        case .waving:
+            return .easeInOut(duration: 0.16)
+        case .running:
+            return .easeIn(duration: 1.04)
+        case .recovering:
+            return .spring(response: 0.36, dampingFraction: 0.72)
+        case .fadingIn, .fadingOut:
+            return .easeOut(duration: 0.18)
+        case .idle:
+            return .spring(response: 0.3, dampingFraction: 0.62)
+        }
+    }
+
+    private var waveRotation: Double {
+        store.animationPhase == .waving ? farewellWaveTilt : 0
+    }
+
+    private var farewellMood: DesktopPetMood {
+        switch store.animationPhase {
+        case .waving, .running:
+            return .celebrating
+        default:
+            return store.mood
+        }
+    }
+
+    private var isRunningLeft: Bool {
+        if case .running(.left) = store.animationPhase { return true }
+        return false
+    }
+
+    private func trailAnchorOffset(for edge: DesktopPetScreenEdge) -> CGSize {
+        switch edge {
+        case .left: return CGSize(width: petSize * 0.27, height: 0)
+        case .right: return CGSize(width: -petSize * 0.27, height: 0)
+        case .top: return CGSize(width: 0, height: petSize * 0.27)
+        case .bottom: return CGSize(width: 0, height: -petSize * 0.27)
+        }
     }
 
     @ViewBuilder
     private var bubbleBody: some View {
         if store.activeSessions.isEmpty {
             PetSpeechBubble(text: store.speech)
+                .allowsHitTesting(false)
         } else {
-            PetAgentActivityBubble(sessions: store.activeSessions)
+            PetAgentActivityBubble(sessions: store.activeSessions, petSize: petSize)
         }
     }
 
@@ -279,17 +512,18 @@ struct DesktopPetFloatingView: View {
         ZStack(alignment: .topTrailing) {
             DesktopPetSpriteView(
                 pack: store.activePack,
-                mood: store.mood,
+                mood: farewellMood,
                 size: petSize
             )
-            if store.mood == .working {
+            .scaleEffect(x: isRunningLeft ? -1 : 1, y: 1)
+            if store.animationPhase == .idle, store.mood == .working {
                 Image(systemName: "sparkle")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(.cyan)
                     .offset(x: 1, y: 4)
                     .transition(.opacity.combined(with: .scale))
             }
-            if store.mood == .blocked {
+            if store.animationPhase == .idle, store.mood == .blocked {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(.orange)
@@ -297,7 +531,7 @@ struct DesktopPetFloatingView: View {
                     .offset(x: 2, y: 4)
                     .transition(.opacity.combined(with: .scale))
             }
-            if showHearts {
+            if showHearts, store.animationPhase == .idle {
                 PetHeartBurst()
                     .allowsHitTesting(false)
                     .transition(.opacity.combined(with: .scale))
@@ -334,9 +568,90 @@ struct DesktopPetFloatingView: View {
             }
             Divider()
             Button(PetUI.text("隐藏桌面宠物", "Hide Desktop Pet")) {
-                store.setEnabled(false)
+                onHidePet()
             }
         }
+    }
+}
+
+private struct PetLandingPuff: View {
+    @State private var hasExpanded = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Ellipse()
+                .fill(.white.opacity(0.72))
+                .frame(width: 13, height: 6)
+                .offset(y: 2)
+            Ellipse()
+                .fill(.cyan.opacity(0.55))
+                .frame(width: 9, height: 4)
+                .offset(y: -2)
+            Ellipse()
+                .fill(.pink.opacity(0.58))
+                .frame(width: 13, height: 6)
+                .offset(y: 2)
+        }
+        .scaleEffect(hasExpanded ? 1.18 : 0.58)
+        .opacity(hasExpanded ? 0 : 0.62)
+        .blur(radius: 1.4)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.28)) {
+                hasExpanded = true
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct PetMotionTrail: View {
+    let edge: DesktopPetScreenEdge
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: false)) { context in
+            let cycleDuration = 0.58
+            let phase = context.date.timeIntervalSinceReferenceDate
+                .truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
+
+            ZStack {
+                ForEach(0..<4, id: \.self) { index in
+                    let particlePhase = (phase + Double(index) * 0.24).truncatingRemainder(dividingBy: 1)
+                    Circle()
+                        .fill(particleColor(index))
+                        .frame(width: particleSize(index), height: particleSize(index))
+                        .blur(radius: index == 0 ? 0 : 0.3)
+                        .offset(particleOffset(index, progress: particlePhase))
+                        .opacity(0.72 * (1 - particlePhase))
+                }
+            }
+        }
+        .frame(width: 62, height: 62)
+        .accessibilityHidden(true)
+    }
+
+    private func particleColor(_ index: Int) -> Color {
+        [.yellow.opacity(0.9), .cyan.opacity(0.8), .pink.opacity(0.78), .white.opacity(0.7)][index]
+    }
+
+    private func particleSize(_ index: Int) -> CGFloat {
+        [5, 4, 6, 3][index]
+    }
+
+    private func particleOffset(_ index: Int, progress: Double) -> CGSize {
+        let trailing: CGSize
+        switch edge {
+        case .left: trailing = CGSize(width: 1, height: 0)
+        case .right: trailing = CGSize(width: -1, height: 0)
+        case .top: trailing = CGSize(width: 0, height: 1)
+        case .bottom: trailing = CGSize(width: 0, height: -1)
+        }
+        let side = index.isMultiple(of: 2) ? -1.0 : 1.0
+        let distance = CGFloat(8 + index * 3) + CGFloat(progress) * 24
+        let flutter = CGFloat(sin(progress * .pi)) * side * 9
+        if trailing.width == 0 {
+            return CGSize(width: flutter, height: trailing.height * distance)
+        }
+        return CGSize(width: trailing.width * distance, height: flutter)
     }
 }
 
@@ -475,10 +790,10 @@ private struct PetSpeechBubble: View {
 
     var body: some View {
         VStack(spacing: -1) {
-            Text(text)
+            Text(PetSpeechLineBreak.balanced(text))
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(.primary)
-                .lineLimit(2)
+                .lineLimit(3)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 200)
                 .padding(.horizontal, 10)
@@ -497,14 +812,111 @@ private struct PetSpeechBubble: View {
     }
 }
 
+private enum PetSpeechLineBreak {
+    // Leave a little room for the rounded SwiftUI font, whose glyph widths
+    // can differ slightly from AppKit's system font used for measurement.
+    private static let lineWidth: CGFloat = 194
+    private static let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+    private static let spacedPunctuation: Set<Character> = [".", "!", "?", ",", ";", ":"]
+    private static let clausePunctuation: Set<Character> = ["—", "–", "，", "。", "！", "？", "；", "：", "、"]
+
+    static func balanced(_ text: String) -> String {
+        // Custom messages may contain intentional line breaks.
+        guard !text.contains("\n"), width(of: text) > lineWidth else { return text }
+
+        var best: (score: CGFloat, value: String)?
+        for index in text.indices {
+            let character = text[index]
+            let next = text.index(after: index)
+            let isClauseBreak = clausePunctuation.contains(character)
+                || (spacedPunctuation.contains(character)
+                    && next < text.endIndex && text[next].isWhitespace)
+            guard isClauseBreak || character.isWhitespace else { continue }
+
+            let split = isClauseBreak ? next : index
+            let first = String(text[..<split]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let second = String(text[split...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !first.isEmpty, !second.isEmpty else { continue }
+
+            let firstWidth = width(of: first)
+            let secondWidth = width(of: second)
+            guard firstWidth <= lineWidth, secondWidth <= lineWidth else { continue }
+
+            // Favor a sentence or clause boundary; otherwise use the most
+            // even word boundary instead of leaving a short phrase orphaned.
+            let score = abs(firstWidth - secondWidth) + (isClauseBreak ? 0 : 80)
+            if let best, best.score <= score { continue }
+            best = (score, "\(first)\n\(second)")
+        }
+        return best?.value ?? text
+    }
+
+    private static func width(of text: String) -> CGFloat {
+        (text as NSString).size(withAttributes: [.font: font]).width
+    }
+}
+
+enum PetAgentBubbleLayout {
+    static let collapsedSessionLimit = 3
+    static let rowHeight: CGFloat = 100
+    static let rowSpacing: CGFloat = 7
+    static let disclosureHeight: CGFloat = 20
+    static let disclosureSpacing: CGFloat = 5
+
+    static func rowsHeight(sessionCount: Int) -> CGFloat {
+        guard sessionCount > 0 else { return 0 }
+        return CGFloat(sessionCount) * rowHeight
+            + CGFloat(max(sessionCount - 1, 0)) * rowSpacing
+    }
+
+    static func contentHeight(sessionCount: Int) -> CGFloat {
+        guard sessionCount > 0 else { return 0 }
+        let initiallyVisibleCount = min(sessionCount, collapsedSessionLimit)
+        let rows = rowsHeight(sessionCount: initiallyVisibleCount)
+        guard sessionCount > collapsedSessionLimit else { return rows }
+        return rows + disclosureSpacing + disclosureHeight
+    }
+
+    static func maximumContentHeight(for petSize: CGFloat) -> CGFloat {
+        let smallestScreenHeight = NSScreen.screens.map { $0.visibleFrame.height }.min() ?? 800
+        return max(80, min(420, smallestScreenHeight - petSize - 50))
+    }
+}
+
 private struct PetAgentActivityBubble: View {
     let sessions: [PetActiveAgentSession]
+    let petSize: CGFloat
+    @State private var showsAllSessions = false
+
+    private var visibleContentHeight: CGFloat {
+        let initialRows = min(sessions.count, PetAgentBubbleLayout.collapsedSessionLimit)
+        let rowsHeight = PetAgentBubbleLayout.rowsHeight(sessionCount: initialRows)
+        let disclosureHeight = sessions.count > PetAgentBubbleLayout.collapsedSessionLimit
+            ? PetAgentBubbleLayout.disclosureHeight + PetAgentBubbleLayout.disclosureSpacing
+            : 0
+        let maxRowsHeight = max(
+            PetAgentBubbleLayout.rowHeight,
+            PetAgentBubbleLayout.maximumContentHeight(for: petSize) - disclosureHeight
+        )
+        return min(rowsHeight, maxRowsHeight)
+    }
 
     private var displayedSessions: [PetActiveAgentSession] {
         sessions.sorted {
             if $0.mood != $1.mood { return Self.priority(for: $0.mood) < Self.priority(for: $1.mood) }
             return $0.updatedAt > $1.updatedAt
         }
+    }
+
+    private var visibleSessions: [PetActiveAgentSession] {
+        guard showsAllSessions else {
+            return Array(displayedSessions.prefix(PetAgentBubbleLayout.collapsedSessionLimit))
+        }
+        return displayedSessions
+    }
+
+    private var hiddenSessionCount: Int {
+        max(0, sessions.count - PetAgentBubbleLayout.collapsedSessionLimit)
     }
 
     private static func priority(for mood: DesktopPetMood) -> Int {
@@ -517,26 +929,65 @@ private struct PetAgentActivityBubble: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            ForEach(Array(displayedSessions.prefix(3))) { session in
-                PetAgentSessionRow(session: session, compact: true)
+        VStack(spacing: PetAgentBubbleLayout.disclosureSpacing) {
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: PetAgentBubbleLayout.rowSpacing) {
+                    ForEach(visibleSessions) { session in
+                        PetAgentSessionRow(session: session, compact: true)
+                    }
+                }
             }
-            if sessions.count > 3 {
-                Text("+\(sessions.count - 3) \(PetUI.text("个 Agent", "more agents"))")
-                    .font(.system(size: 10, weight: .medium))
+            .scrollIndicators(.hidden)
+            .frame(height: visibleContentHeight)
+
+            if hiddenSessionCount > 0 {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        showsAllSessions.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(
+                            showsAllSessions
+                                ? PetUI.text("收起", "Show fewer", "折りたたむ", "접기")
+                                : "+\(hiddenSessionCount) \(PetUI.text("个工作项", "more agents"))"
+                        )
+                        Image(systemName: showsAllSessions ? "chevron.up" : "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                    }
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .frame(maxWidth: .infinity, minHeight: PetAgentBubbleLayout.disclosureHeight, alignment: .center)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint(
+                    showsAllSessions
+                        ? PetUI.text("折叠其余工作项", "Collapse the additional active agents")
+                        : PetUI.text("展开其余工作项", "Expand the additional active agents")
+                )
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .frame(maxWidth: 240, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.22), lineWidth: 1)
+        .padding(.horizontal, 13)
+        .padding(.vertical, 10)
+        .frame(maxWidth: 300, alignment: .leading)
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(red: 0.995, green: 0.998, blue: 1),
+                    Color(red: 0.955, green: 0.973, blue: 0.989)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
         )
-        .shadow(color: .black.opacity(0.18), radius: 7, y: 3)
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.white.opacity(0.9), lineWidth: 1)
+        )
+        .shadow(color: Color(red: 0.18, green: 0.32, blue: 0.45).opacity(0.14), radius: 16, y: 7)
+        .environment(\.colorScheme, .light)
     }
 }
 
@@ -544,13 +995,24 @@ private struct PetAgentSessionRow: View {
     let session: PetActiveAgentSession
     var compact = false
 
+    @Environment(\.colorScheme) private var colorScheme
+
     private var stateColor: Color {
         switch session.mood {
-        case .blocked: return .red
-        case .waiting: return .orange
-        case .working: return .cyan
+        case .blocked:
+            return colorScheme == .dark ? .red : Color(red: 0.78, green: 0.25, blue: 0.32)
+        case .waiting:
+            return colorScheme == .dark ? .orange : Color(red: 0.69, green: 0.42, blue: 0.08)
+        case .working:
+            return colorScheme == .dark ? .cyan : Color(red: 0.02, green: 0.52, blue: 0.66)
         case .celebrating, .resting, .idle: return .secondary
         }
+    }
+
+    private var reasoningColor: Color {
+        colorScheme == .dark
+            ? Color(red: 0.79, green: 0.61, blue: 0.98)
+            : Color(red: 0.48, green: 0.25, blue: 0.65)
     }
 
     private var stateTitle: String {
@@ -564,53 +1026,117 @@ private struct PetAgentSessionRow: View {
 
     var body: some View {
         TimelineView(.periodic(from: Date(), by: 1)) { timeline in
-            HStack(spacing: 6) {
-                if let provider = session.provider {
-                    ProviderLogo(
-                        provider: provider,
-                        size: compact ? 14 : 17,
-                        fallbackColor: ProviderPalette.color(for: provider)
-                    )
-                } else {
-                    Image(systemName: "bolt.fill")
-                        .font(.system(size: compact ? 10 : 12, weight: .semibold))
-                        .foregroundStyle(stateColor)
-                        .frame(width: compact ? 14 : 17, height: compact ? 14 : 17)
-                }
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(stateColor)
-                            .frame(width: 5, height: 5)
-                        Text(stateTitle)
-                            .font(.system(size: compact ? 10 : 11, weight: .bold, design: .rounded))
-                        if let model = session.model, !model.isEmpty {
-                            Text(model)
-                                .font(.system(size: compact ? 8 : 9, weight: .semibold, design: .rounded))
-                                .lineLimit(1)
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(stateColor.opacity(0.16), in: Capsule())
-                        }
+            VStack(alignment: .leading, spacing: compact ? 6 : 7) {
+                HStack(spacing: 7) {
+                    providerMark
+                    PetAgentStatusIndicator(color: stateColor, isWorking: session.mood == .working)
+                    Text(stateTitle)
+                        .font(.system(size: compact ? 12 : 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.primary.opacity(0.92))
+                        .lineLimit(1)
+                    if session.isSubagent == true {
+                        subagentBadge
                     }
-                    if let message = session.message, !message.isEmpty {
-                        Text(message)
-                            .font(.system(size: compact ? 10 : 11, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    } else if let projectPath = session.projectPath {
-                        Text(URL(fileURLWithPath: projectPath).lastPathComponent)
-                            .font(.system(size: compact ? 10 : 11, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                    Spacer(minLength: 2)
+                    Text(Self.elapsed(since: session.stateSince, now: timeline.date))
+                        .font(.system(size: compact ? 10 : 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color.primary.opacity(0.68))
+                        .fixedSize()
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(Color.primary.opacity(0.055), in: Capsule())
                 }
-                Spacer(minLength: 2)
-                Text(Self.elapsed(since: session.stateSince, now: timeline.date))
-                    .font(.system(size: compact ? 9 : 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                if let action {
+                    Text(action)
+                        .font(.system(size: compact ? 12 : 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.primary.opacity(0.86))
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                metadataLine
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, compact ? 6 : 7)
+            .frame(minHeight: compact ? PetAgentBubbleLayout.rowHeight : nil, alignment: .topLeading)
+        }
+    }
+
+    private var providerMark: some View {
+        Group {
+            if let provider = session.provider {
+                ProviderLogo(
+                    provider: provider,
+                    size: compact ? 15 : 17,
+                    fallbackColor: ProviderPalette.color(for: provider)
+                )
+            } else {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: compact ? 11 : 12, weight: .semibold))
+                    .foregroundStyle(stateColor)
             }
         }
+        .frame(width: compact ? 23 : 25, height: compact ? 23 : 25)
+        .background(stateColor.opacity(colorScheme == .dark ? 0.15 : 0.08), in: RoundedRectangle(cornerRadius: 7))
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var metadataLine: some View {
+        let model = session.model.flatMap { $0.isEmpty ? nil : $0 }
+        let effort = session.reasoningEffort.flatMap { $0.isEmpty ? nil : $0 }
+
+        if model != nil || effort != nil {
+            HStack(spacing: 5) {
+                if let model {
+                    metadataChip(value: model, systemImage: "cpu")
+                        .layoutPriority(1)
+                }
+                if let effort {
+                    metadataChip(
+                        value: "\(L10n.text(.reasoning)) \(PetUI.reasoningEffort(effort))",
+                        systemImage: "brain.head.profile",
+                        tint: reasoningColor
+                    )
+                }
+            }
+        }
+    }
+
+    private var action: String? {
+        session.message.flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    private var subagentBadge: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "person.2.fill")
+                .font(.system(size: compact ? 8 : 9, weight: .semibold))
+            Text(PetUI.text("子智能体", "Subagent", "サブエージェント", "하위 에이전트"))
+                .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+        }
+        .foregroundStyle(Color.purple.opacity(0.95))
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.purple.opacity(0.11), in: Capsule())
+        .accessibilityElement(children: .combine)
+    }
+
+    private func metadataChip(value: String, systemImage: String, tint: Color? = nil) -> some View {
+        let foreground = tint ?? Color.primary.opacity(0.78)
+        return HStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.system(size: 10, weight: .semibold))
+            Text(value)
+                .font(.system(size: compact ? 10 : 11, weight: .semibold, design: .rounded))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .foregroundStyle(foreground)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background((tint ?? Color.primary).opacity(tint == nil ? 0.06 : 0.10), in: Capsule())
+        .overlay(Capsule().stroke((tint ?? Color.primary).opacity(0.14), lineWidth: 0.7))
     }
 
     private static func elapsed(since date: Date, now: Date) -> String {
@@ -624,6 +1150,33 @@ private struct PetAgentSessionRow: View {
         let hours = minutes / 60
         let remainingMinutes = minutes % 60
         return "\(hours)h \(String(format: "%02d", remainingMinutes))m \(String(format: "%02d", remainingSeconds))s"
+    }
+}
+
+private struct PetAgentStatusIndicator: View {
+    let color: Color
+    let isWorking: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0, paused: reduceMotion || !isWorking)) { timeline in
+            let pulse = isWorking && !reduceMotion
+                ? (sin(timeline.date.timeIntervalSinceReferenceDate * 2.2 * .pi) + 1) / 2
+                : 0.0
+            ZStack {
+                Circle()
+                    .stroke(color.opacity(0.22 + 0.16 * pulse), lineWidth: 1.5)
+                    .frame(width: 12, height: 12)
+                    .scaleEffect(0.9 + 0.14 * pulse)
+                Circle()
+                    .fill(color)
+                    .frame(width: 6, height: 6)
+                    .opacity(0.76 + 0.24 * pulse)
+            }
+            .frame(width: 14, height: 14)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -642,11 +1195,13 @@ struct DesktopPetHUDView: View {
     @ObservedObject var store: DesktopPetStore
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
     let onOpenSettings: () -> Void
+    let onHidePet: () -> Void
     @State private var showsAchievementDetails = false
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 14) {
+                topBar
                 header
                 Divider()
                 care
@@ -667,6 +1222,27 @@ struct DesktopPetHUDView: View {
         .frame(width: 330)
         .background(.ultraThinMaterial)
         .preferredColorScheme(.dark)
+    }
+
+    private var topBar: some View {
+        HStack {
+            Label(PetUI.text("桌面宠物", "Desktop Pet"), systemImage: "pawprint.fill")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button(action: onOpenSettings) {
+                Label(PetUI.text("设置", "Settings", "設定", "설정"), systemImage: "gearshape")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Button(action: onHidePet) {
+                Label(PetUI.text("隐藏", "Hide"), systemImage: "eye.slash")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
     }
 
     private var header: some View {
@@ -854,17 +1430,7 @@ struct DesktopPetHUDView: View {
                 Label(PetUI.text("喂一喂", "Feed"), systemImage: "heart.fill")
             }
             .buttonStyle(.borderedProminent)
-            Button {
-                onOpenSettings()
-            } label: {
-                Image(systemName: "gearshape")
-            }
-            .buttonStyle(.bordered)
-            Spacer()
-            Button(PetUI.text("隐藏", "Hide")) {
-                store.setEnabled(false)
-            }
-            .buttonStyle(.link)
+            Spacer(minLength: 0)
         }
     }
 

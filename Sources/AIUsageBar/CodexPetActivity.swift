@@ -25,9 +25,15 @@ enum CodexPetTaskAction: String, Hashable, Sendable {
 
 struct CodexPetTaskActivity: Identifiable, Hashable, Sendable {
     let id: String
+    /// Codex can write a new rollout file for an edited turn while keeping
+    /// the conversation's session_id. This lets us distinguish a retried
+    /// turn from an unrelated task in the same project.
+    let sessionID: String?
     let state: CodexPetTaskState
     let projectPath: String?
     let model: String?
+    let reasoningEffort: String?
+    let isSubagent: Bool
     let action: CodexPetTaskAction?
     let startedAt: Date
     let updatedAt: Date
@@ -147,8 +153,29 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                 newestByID[activity.id] = activity
             }
         }
+        var latestSupersedingBySession: [String: Date] = [:]
+        for activity in newestByID.values where activity.state == .running || activity.state == .completed {
+            guard let sessionID = activity.sessionID else { continue }
+            if let previous = latestSupersedingBySession[sessionID] {
+                latestSupersedingBySession[sessionID] = max(previous, activity.updatedAt)
+            } else {
+                latestSupersedingBySession[sessionID] = activity.updatedAt
+            }
+        }
+
         return newestByID.values
             .filter { activity in
+                // An edited/resubmitted turn can live in a new rollout file
+                // but still belongs to the same Codex conversation. Once its
+                // replacement is running or completed, the previous
+                // turn_aborted row is historical and must not keep the pet
+                // blocked.
+                if activity.state == .blocked,
+                   let sessionID = activity.sessionID,
+                   let supersedingAt = latestSupersedingBySession[sessionID],
+                   supersedingAt >= activity.updatedAt {
+                    return false
+                }
                 switch activity.state {
                 case .running:
                     return now.timeIntervalSince(activity.updatedAt) <= runningActivityWindow
@@ -194,6 +221,9 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
         struct TurnContext {
             var projectPath: String?
             var model: String?
+            var reasoningEffort: String?
+            var sessionID: String?
+            var isSubagent = false
         }
         struct MutableActivity {
             var state: CodexPetTaskState
@@ -204,7 +234,18 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
         }
 
         var sessionContext = TurnContext()
+        sessionContext.sessionID = Self.sessionIDFromFilename(for: url)
+        if let payload = Self.initialSessionMetadata(at: url) {
+            sessionContext.projectPath = LocalData.string(payload["cwd"])
+            sessionContext.sessionID = LocalData.string(payload["session_id"])
+                ?? LocalData.string(payload["id"])
+                ?? sessionContext.sessionID
+            sessionContext.model = Self.modelName(in: payload)
+            sessionContext.reasoningEffort = Self.reasoningEffort(in: payload)
+            sessionContext.isSubagent = Self.isSubagent(in: payload)
+        }
         var contexts: [String: TurnContext] = [:]
+        let fileSessionID = sessionContext.sessionID
         var tasks = Dictionary(
             uniqueKeysWithValues: seedActivities.map { activity in
                 (
@@ -215,7 +256,10 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                         updatedAt: activity.updatedAt,
                         context: TurnContext(
                             projectPath: activity.projectPath,
-                            model: activity.model
+                            model: activity.model,
+                            reasoningEffort: activity.reasoningEffort,
+                            sessionID: activity.sessionID ?? fileSessionID,
+                            isSubagent: activity.isSubagent
                         ),
                         action: activity.action
                     )
@@ -231,7 +275,8 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
         func touchRunningTask(
             _ turnID: String,
             at timestamp: Date,
-            action: CodexPetTaskAction? = nil
+            action: CodexPetTaskAction? = nil,
+            context: TurnContext? = nil
         ) {
             let id = taskID(for: turnID)
             if var task = tasks[id] {
@@ -239,6 +284,14 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                 task.updatedAt = max(task.updatedAt, timestamp)
                 if let action {
                     task.action = action
+                }
+                if let context {
+                    task.context.projectPath = context.projectPath ?? task.context.projectPath
+                    task.context.model = context.model ?? task.context.model
+                    task.context.reasoningEffort = context.reasoningEffort
+                        ?? task.context.reasoningEffort
+                    task.context.sessionID = context.sessionID ?? task.context.sessionID
+                    task.context.isSubagent = task.context.isSubagent || context.isSubagent
                 }
                 tasks[id] = task
             } else {
@@ -259,6 +312,13 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
 
             if outerType == "session_meta" {
                 sessionContext.projectPath = LocalData.string(payload["cwd"]) ?? sessionContext.projectPath
+                sessionContext.sessionID = LocalData.string(payload["session_id"])
+                    ?? LocalData.string(payload["id"])
+                    ?? sessionContext.sessionID
+                sessionContext.model = Self.modelName(in: payload) ?? sessionContext.model
+                sessionContext.reasoningEffort = Self.reasoningEffort(in: payload)
+                    ?? sessionContext.reasoningEffort
+                sessionContext.isSubagent = Self.isSubagent(in: payload) || sessionContext.isSubagent
                 continue
             }
 
@@ -266,11 +326,17 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                 guard let turnID = LocalData.string(payload["turn_id"]), !turnID.isEmpty else { continue }
                 let context = TurnContext(
                     projectPath: LocalData.string(payload["cwd"]) ?? sessionContext.projectPath,
-                    model: LocalData.string(payload["model"])
+                    model: Self.modelName(in: payload) ?? sessionContext.model,
+                    reasoningEffort: Self.reasoningEffort(in: payload)
+                        ?? sessionContext.reasoningEffort,
+                    sessionID: LocalData.string(payload["session_id"])
+                        ?? LocalData.string(payload["sessionId"])
+                        ?? sessionContext.sessionID,
+                    isSubagent: Self.isSubagent(in: payload) || sessionContext.isSubagent
                 )
                 contexts[turnID] = context
                 currentTurnID = turnID
-                touchRunningTask(turnID, at: objectTimestamp)
+                touchRunningTask(turnID, at: objectTimestamp, context: context)
                 continue
             }
 
@@ -334,7 +400,16 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
 
             guard let turnID = explicitTurnID, !turnID.isEmpty else { continue }
 
-            let context = contexts[turnID] ?? sessionContext
+            var context = contexts[turnID] ?? sessionContext
+            context.projectPath = LocalData.string(payload["cwd"]) ?? context.projectPath
+            context.model = Self.modelName(in: payload) ?? context.model
+            context.reasoningEffort = Self.reasoningEffort(in: payload)
+                ?? context.reasoningEffort
+            context.sessionID = LocalData.string(payload["session_id"])
+                ?? LocalData.string(payload["sessionId"])
+                ?? context.sessionID
+            context.isSubagent = Self.isSubagent(in: payload) || context.isSubagent
+            contexts[turnID] = context
             // The rollout path plus turn ID stays stable even when the tail
             // no longer includes the early session_meta record.
             let id = taskID(for: turnID)
@@ -342,6 +417,18 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
 
             switch eventType {
             case "task_started":
+                // Editing and resending a stopped Codex turn starts a new
+                // turn ID in the same rollout file. The previous turn keeps
+                // its historical `turn_aborted` record, but it must no
+                // longer appear as a live blocked task once the replacement
+                // turn has started. Keep blocked turns from other rollout
+                // files untouched; they may represent separate sessions.
+                let supersededBlockedIDs = tasks.compactMap { id, task in
+                    task.state == .blocked && task.updatedAt <= timestamp ? id : nil
+                }
+                for supersededBlockedID in supersededBlockedIDs {
+                    tasks.removeValue(forKey: supersededBlockedID)
+                }
                 tasks[id] = MutableActivity(
                     state: .running,
                     startedAt: timestamp,
@@ -381,9 +468,12 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
             activities: tasks.map { id, task in
             CodexPetTaskActivity(
                 id: id,
+                sessionID: task.context.sessionID,
                 state: task.state,
                 projectPath: task.context.projectPath,
                 model: task.context.model,
+                reasoningEffort: task.context.reasoningEffort,
+                isSubagent: task.context.isSubagent,
                 action: task.action,
                 startedAt: task.startedAt,
                 updatedAt: task.updatedAt
@@ -391,6 +481,54 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
             },
             currentTurnID: currentTurnID
         )
+    }
+
+    private static func modelName(in object: [String: Any]) -> String? {
+        let collaborationMode = object["collaboration_mode"] as? [String: Any]
+        let collaborationSettings = collaborationMode?["settings"] as? [String: Any]
+        let modelObject = object["model"] as? [String: Any]
+        return firstString(
+            in: [object, collaborationMode, collaborationSettings, modelObject],
+            keys: ["model", "model_name", "modelName", "model_slug", "modelSlug", "name", "id"]
+        )
+    }
+
+    private static func reasoningEffort(in object: [String: Any]) -> String? {
+        let collaborationMode = object["collaboration_mode"] as? [String: Any]
+        let collaborationSettings = collaborationMode?["settings"] as? [String: Any]
+        let reasoning = object["reasoning"] as? [String: Any]
+        let modelObject = object["model"] as? [String: Any]
+        return firstString(
+            in: [object, collaborationSettings, collaborationMode, reasoning, modelObject],
+            keys: [
+                "reasoning_effort", "reasoningEffort", "model_reasoning_effort",
+                "modelReasoningEffort", "reasoning_level", "reasoningLevel", "effort"
+            ]
+        )
+    }
+
+    private static func isSubagent(in object: [String: Any]) -> Bool {
+        if let explicit = object["is_subagent"] as? Bool ?? object["isSubagent"] as? Bool {
+            return explicit
+        }
+        let source = object["source"] as? [String: Any]
+        return source?["subagent"] != nil || object["subagent"] != nil
+    }
+
+    private static func firstString(
+        in objects: [[String: Any]?],
+        keys: [String]
+    ) -> String? {
+        let wanted = Set(keys.map(LocalData.normalizedKey))
+        for object in objects.compactMap({ $0 }) {
+            for (key, value) in object where wanted.contains(LocalData.normalizedKey(key)) {
+                guard let value = LocalData.string(value)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                      !value.isEmpty else { continue }
+                return value
+            }
+        }
+        return nil
     }
 
     private static func action(forResponseItem payload: [String: Any]) -> CodexPetTaskAction? {
@@ -477,6 +615,13 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
             .replacingOccurrences(of: " ", with: "_")
     }
 
+    private static func sessionIDFromFilename(for url: URL) -> String? {
+        let filename = url.deletingPathExtension().lastPathComponent
+        let pattern = "[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}"
+        guard let range = filename.range(of: pattern, options: .regularExpression) else { return nil }
+        return String(filename[range])
+    }
+
     private static func containsAny(_ value: String, _ fragments: [String]) -> Bool {
         fragments.contains { value.contains($0) }
     }
@@ -499,5 +644,16 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
             data.removeSubrange(...firstNewline)
         }
         return data
+    }
+
+    private static func initialSessionMetadata(at url: URL) -> [String: Any]? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let data = handle.readData(ofLength: 128 * 1024)
+        guard let firstLine = data.split(separator: 0x0A, maxSplits: 1).first,
+              let object = LocalData.parseJSON(data: Data(firstLine)) as? [String: Any],
+              LocalData.string(object["type"]) == "session_meta"
+        else { return nil }
+        return object["payload"] as? [String: Any]
     }
 }
