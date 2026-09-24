@@ -22,6 +22,9 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable {
         .openCode, .qianwenOffice, .deepSeekHarness
     ]
 
+    // Only these providers read accounts added through the settings form.
+    static let manuallyConfigurableCases: [ProviderID] = [.miniMax, .qwenWork]
+
     var displayName: String {
         L10n.providerName(self)
     }

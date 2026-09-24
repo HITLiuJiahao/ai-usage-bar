@@ -176,6 +176,8 @@ struct DashboardPopover: View {
     @ObservedObject var store: UsageStore
     @ObservedObject private var providerOrder = ProviderOrderStore.shared
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
+    @ObservedObject private var appearanceSettings = DashboardAppearanceSettings.shared
+    @Environment(\.colorScheme) private var systemColorScheme
     private let visibleFrame: CGRect?
     let onSizeChange: (CGSize) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -194,32 +196,32 @@ struct DashboardPopover: View {
         self.onSizeChange = onSizeChange
     }
 
+    private var theme: DashboardTheme {
+        DashboardTheme(settings: appearanceSettings, systemColorScheme: systemColorScheme)
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
-            DashboardPalette.background
+            theme.background
                 .ignoresSafeArea()
-            RadialGradient(
-                colors: [
-                    DashboardPalette.accent.opacity(0.18),
-                    Color.clear
-                ],
-                center: .topLeading,
-                startRadius: 10,
-                endRadius: 420
-            )
-            .blur(radius: 12)
-            .ignoresSafeArea()
-            RadialGradient(
-                colors: [
-                    Color(red: 0.38, green: 0.92, blue: 0.82).opacity(0.12),
-                    Color.clear
-                ],
-                center: .bottomTrailing,
-                startRadius: 10,
-                endRadius: 360
-            )
-            .blur(radius: 18)
-            .ignoresSafeArea()
+            if theme.glowOpacity > 0 {
+                RadialGradient(
+                    colors: [theme.accent.opacity(theme.glowOpacity), .clear],
+                    center: .topLeading,
+                    startRadius: 10,
+                    endRadius: 420
+                )
+                .blur(radius: 12)
+                .ignoresSafeArea()
+                RadialGradient(
+                    colors: [theme.accent.opacity(theme.glowOpacity * 0.65), .clear],
+                    center: .bottomTrailing,
+                    startRadius: 10,
+                    endRadius: 360
+                )
+                .blur(radius: 18)
+                .ignoresSafeArea()
+            }
 
             VStack(alignment: .leading, spacing: 10) {
                 dashboardHeader
@@ -269,14 +271,15 @@ struct DashboardPopover: View {
                 height: dashboardContentHeight,
                 alignment: .topLeading
             )
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-            )
         }
-        .preferredColorScheme(.dark)
         .frame(width: DashboardLayout.width, height: dashboardContentHeight)
+        .clipShape(RoundedRectangle(cornerRadius: theme.cornerRadius(24), style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: theme.cornerRadius(24), style: .continuous)
+                .stroke(theme.edge, lineWidth: 1)
+        )
+        .environment(\.dashboardTheme, theme)
+        .environment(\.colorScheme, theme.isDark ? .dark : .light)
         .onAppear {
             reportDashboardSize()
         }
@@ -428,16 +431,15 @@ struct DashboardPopover: View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
                 Circle()
-                    .fill(DashboardPalette.accent.opacity(0.18))
+                    .fill(theme.accent.opacity(0.18))
                     .frame(width: 48, height: 48)
-                Image(systemName: "gauge.medium")
-                    .font(.system(size: 25, weight: .medium))
-                    .foregroundStyle(DashboardPalette.accent)
+                BrandPulseMark()
+                    .frame(width: 38, height: 38)
             }
             .frame(width: 48, height: 48)
-            .aiLiquidGlass(
-                tint: DashboardPalette.accent.opacity(0.18),
-                in: Circle(),
+            .dashboardSurface(
+                tint: theme.accent.opacity(0.18),
+                cornerRadius: 24,
                 interactive: true
             )
 
@@ -450,7 +452,7 @@ struct DashboardPopover: View {
                 }
                 Text(L10n.text(.overviewSubtitle, language: languageSettings.language))
                     .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(theme.text(0.55))
             }
 
             Spacer()
@@ -459,11 +461,11 @@ struct DashboardPopover: View {
                 if let lastRefreshAt = store.lastRefreshAt {
                     Text("\(L10n.text(.updated, language: languageSettings.language)) \(L10n.timeString(lastRefreshAt, language: languageSettings.language))")
                         .font(.system(size: 13, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.62))
+                        .foregroundStyle(theme.text(0.62))
                 } else {
                 Text(L10n.text(.reading, language: languageSettings.language))
                         .font(.system(size: 13, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.62))
+                        .foregroundStyle(theme.text(0.62))
                 }
                 Text(
                     L10n.text(
@@ -472,7 +474,7 @@ struct DashboardPopover: View {
                     )
                 )
                     .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.38))
+                    .foregroundStyle(theme.text(0.38))
             }
 
             DashboardIconButton(
@@ -502,16 +504,16 @@ struct DashboardPopover: View {
                 } label: {
                     Text(value.title)
                         .font(.system(size: 15, weight: period == value ? .semibold : .medium))
-                        .foregroundStyle(period == value ? .white : .white.opacity(0.58))
+                        .foregroundStyle(period == value ? theme.ink : theme.text(0.58))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 11)
                         .background {
                             if period == value {
-                                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                    .fill(Color.white.opacity(0.13))
+                                RoundedRectangle(cornerRadius: theme.cornerRadius(13), style: .continuous)
+                                    .fill(theme.accent.opacity(theme.isDark ? 0.20 : 0.13))
                                     .overlay(
-                                        RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                                        RoundedRectangle(cornerRadius: theme.cornerRadius(13), style: .continuous)
+                                            .stroke(theme.accent.opacity(0.40), lineWidth: 1)
                                     )
                                     .matchedGeometryEffect(
                                         id: "period-selection",
@@ -528,8 +530,8 @@ struct DashboardPopover: View {
         }
         .frame(maxWidth: .infinity)
         .padding(5)
-        .aiLiquidGlass(
-            tint: Color.white.opacity(0.10),
+        .dashboardSurface(
+            tint: theme.accent.opacity(0.10),
             cornerRadius: 16,
             interactive: true
         )
@@ -550,11 +552,11 @@ struct DashboardPopover: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 7) {
                 Circle()
-                    .fill(DashboardPalette.success)
+                    .fill(theme.success)
                     .frame(width: 6, height: 6)
                 Text(L10n.text(.refreshEvery30Seconds, language: languageSettings.language))
                 Text("·")
-                    .foregroundStyle(.white.opacity(0.22))
+                    .foregroundStyle(theme.ink.opacity(0.24))
                 Text(L10n.text(.sourceFootnote, language: languageSettings.language))
                 Spacer()
                 Text(
@@ -565,7 +567,7 @@ struct DashboardPopover: View {
                         language: languageSettings.language
                     )
                 )
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(theme.text(0.45))
             }
 
             if !hiddenProviderNames.isEmpty {
@@ -573,12 +575,12 @@ struct DashboardPopover: View {
                     "\(L10n.text(.noUsageInPeriod, language: languageSettings.language))：\(hiddenProviderNames.joined(separator: " · "))"
                 )
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.34))
+                    .foregroundStyle(theme.text(0.34))
                     .lineLimit(2)
             }
         }
         .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(.white.opacity(0.48))
+        .foregroundStyle(theme.text(0.48))
     }
 }
 
@@ -598,6 +600,7 @@ private struct DashboardProviderCard: View {
     let snapshot: ProviderSnapshot
     let period: DashboardPeriod
     let equalizedHeight: CGFloat?
+    @Environment(\.dashboardTheme) private var theme
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
     @State private var isModelExpanded = false
 
@@ -857,7 +860,7 @@ private struct DashboardProviderCard: View {
         if !balancePresentations.isEmpty || resetCreditsAvailableCount != nil {
             VStack(alignment: .leading, spacing: 3) {
                 Rectangle()
-                    .fill(Color.white.opacity(0.10))
+                    .fill(theme.hairline)
                     .frame(height: 1)
 
                 ForEach(balancePresentations) { balance in
@@ -882,11 +885,11 @@ private struct DashboardProviderCard: View {
                             }
                             Text(balance.title)
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.68))
+                                .foregroundStyle(theme.text(0.68))
                             Spacer(minLength: 4)
                             Text(balance.valueText)
                                 .font(.system(size: 14, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.92))
+                                .foregroundStyle(theme.text(0.92))
                             if let percentText = balance.percentText, balance.metric.unit != "%" {
                                 Text(percentText)
                                     .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -894,10 +897,10 @@ private struct DashboardProviderCard: View {
                             }
                             if let resetAt = balance.resetAt {
                                 Text("·")
-                                    .foregroundStyle(.white.opacity(0.28))
+                                    .foregroundStyle(theme.text(0.28))
                                 Text(resetAt, formatter: balanceDateFormatter)
                                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(.white.opacity(0.55))
+                                    .foregroundStyle(theme.text(0.55))
                             }
                         }
 
@@ -923,7 +926,7 @@ private struct DashboardProviderCard: View {
                             )
                         )
                             .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.68))
+                            .foregroundStyle(theme.text(0.68))
                         Spacer(minLength: 4)
                         if let resetCreditsExpiresAt {
                             HStack(spacing: 4) {
@@ -931,7 +934,7 @@ private struct DashboardProviderCard: View {
                                 Text(resetCreditsExpiresAt, formatter: balanceDateFormatter)
                             }
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.52))
+                            .foregroundStyle(theme.text(0.52))
                             .lineLimit(1)
                             .minimumScaleFactor(0.72)
                         }
@@ -942,11 +945,11 @@ private struct DashboardProviderCard: View {
                 HStack {
                     Text(L10n.text(.plan, language: languageSettings.language))
                         .font(.system(size: 11, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.52))
+                        .foregroundStyle(theme.text(0.52))
                     Spacer(minLength: 4)
                     Text(balancePresentations.first?.planName ?? "—")
                         .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.88))
+                        .foregroundStyle(theme.text(0.88))
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3)
                         .background(
@@ -1004,7 +1007,7 @@ private struct DashboardProviderCard: View {
                     )
             }
         }
-        .aiLiquidGlass(
+        .dashboardSurface(
             tint: DashboardPalette.color(for: snapshot.provider).opacity(0.18),
             cornerRadius: 20
         )
@@ -1039,21 +1042,21 @@ private struct DashboardProviderCard: View {
             if let primaryMetric {
                 Text(primaryValueText(primaryMetric))
                     .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.ink)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                     .contentTransition(.opacity)
                 Text(primaryLabel(primaryMetric))
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.52))
+                    .foregroundStyle(theme.text(0.52))
                     .contentTransition(.opacity)
             } else {
                 Text("—")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.55))
+                    .foregroundStyle(theme.text(0.55))
                 Text(L10n.text(.waitingForData, language: languageSettings.language))
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.52))
+                    .foregroundStyle(theme.text(0.52))
             }
         }
     }
@@ -1083,11 +1086,11 @@ private struct DashboardProviderCard: View {
                         .foregroundStyle(DashboardPalette.color(for: snapshot.provider))
                     Text("\(L10n.text(.byModel, language: languageSettings.language)) (\(modelUsages.count))")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.78))
+                        .foregroundStyle(theme.text(0.78))
                     Spacer(minLength: 4)
                     Image(systemName: isModelExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.52))
+                        .foregroundStyle(theme.text(0.52))
                 }
                 .contentShape(Rectangle())
             }
@@ -1097,11 +1100,11 @@ private struct DashboardProviderCard: View {
                 if modelUsages.isEmpty {
                     Text(L10n.text(.noModelDetails, language: languageSettings.language))
                         .font(.system(size: 11))
-                        .foregroundStyle(.white.opacity(0.40))
+                        .foregroundStyle(theme.text(0.40))
                         .padding(.horizontal, 10)
                         .padding(.vertical, 10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .background(theme.subtleFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                 } else {
                     VStack(alignment: .leading, spacing: 7) {
                         ForEach(modelUsages) { usage in
@@ -1114,7 +1117,7 @@ private struct DashboardProviderCard: View {
                     }
                     .padding(.horizontal, 10)
                     .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    .background(theme.subtleFill, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
                 }
             }
         }
@@ -1148,10 +1151,10 @@ private struct DashboardProviderCard: View {
 
     private var statusColor: Color {
         switch snapshot.state {
-        case .connected: return DashboardPalette.success
-        case .partial: return DashboardPalette.warning
+        case .connected: return theme.success
+        case .partial: return theme.warning
         case .cached: return .purple
-        case .unavailable: return .white.opacity(0.32)
+        case .unavailable: return theme.text(0.52)
         }
     }
 
@@ -1230,6 +1233,7 @@ private struct DashboardStat: Identifiable {
 private struct DashboardStatView: View {
     let stat: DashboardStat
     let accent: Color
+    @Environment(\.dashboardTheme) private var theme
 
     var body: some View {
         HStack(spacing: 8) {
@@ -1246,10 +1250,10 @@ private struct DashboardStatView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(stat.title)
                     .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.52))
+                    .foregroundStyle(theme.text(0.52))
                 Text(stat.value)
                     .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundStyle(theme.text(0.92))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
                     .contentTransition(.opacity)
@@ -1297,6 +1301,7 @@ private struct ModelUsageRow: View {
     let usage: ModelUsage
     let accent: Color
     let currencyUnit: String
+    @Environment(\.dashboardTheme) private var theme
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
 
     private var primaryValue: String {
@@ -1317,26 +1322,26 @@ private struct ModelUsageRow: View {
                     .frame(width: 7, height: 7)
                 Text(usage.name)
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.88))
+                    .foregroundStyle(theme.text(0.88))
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Spacer(minLength: 4)
                 Text(primaryValue)
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.68))
+                    .foregroundStyle(theme.text(0.68))
                     .lineLimit(1)
                 if let hitRate = usage.hitRate {
                     Text("\(Int((hitRate * 100).rounded()))%")
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.72))
+                        .foregroundStyle(theme.text(0.72))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 3)
-                        .background(Color.white.opacity(0.10), in: Capsule())
+                        .background(theme.subtleFill, in: Capsule())
                 }
                 if usage.cost > 0 {
                     Text(NumberFormat.currency(usage.cost, unit: currencyUnit))
                         .font(.system(size: 14, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.92))
+                        .foregroundStyle(theme.text(0.92))
                         .lineLimit(1)
                 }
             }
@@ -1401,6 +1406,7 @@ private struct ModelDetailChip: View {
     let title: String
     let value: String
     let accent: Color
+    @Environment(\.dashboardTheme) private var theme
 
     var body: some View {
         HStack(spacing: 4) {
@@ -1409,7 +1415,7 @@ private struct ModelDetailChip: View {
                 .fontWeight(.bold)
         }
         .font(.system(size: 10, weight: .medium, design: .monospaced))
-        .foregroundStyle(.white.opacity(0.70))
+        .foregroundStyle(theme.text(0.70))
         .padding(.horizontal, 7)
         .padding(.vertical, 4)
         .background(accent.opacity(0.10), in: Capsule())
@@ -1421,16 +1427,17 @@ private struct DashboardIconButton: View {
     let symbol: String
     let help: String
     let action: () -> Void
+    @Environment(\.dashboardTheme) private var theme
 
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(theme.text(0.7))
                 .frame(width: 40, height: 40)
-                .aiLiquidGlass(
-                    tint: Color.white.opacity(0.12),
-                    in: Circle(),
+                .dashboardSurface(
+                    tint: theme.accent.opacity(0.12),
+                    cornerRadius: 20,
                     interactive: true
                 )
         }
@@ -1442,15 +1449,16 @@ private struct DashboardIconButton: View {
 private struct DashboardRefreshButton: View {
     @ObservedObject var store: UsageStore
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
+    @Environment(\.dashboardTheme) private var theme
 
     private var accent: Color {
-        store.refreshError == nil ? DashboardPalette.accent : DashboardPalette.warning
+        store.refreshError == nil ? theme.accent : theme.warning
     }
 
     private var title: String {
         if store.isRefreshing { return L10n.text(.syncing, language: languageSettings.language) }
         if store.refreshError != nil { return L10n.text(.retry, language: languageSettings.language) }
-        return L10n.text(.update, language: languageSettings.language)
+        return L10n.text(.refreshNow, language: languageSettings.language)
     }
 
     var body: some View {
@@ -1462,15 +1470,16 @@ private struct DashboardRefreshButton: View {
 
                 Text(title)
                     .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.92))
+                    .foregroundStyle(theme.text(0.92))
                     .fixedSize(horizontal: true, vertical: false)
                     .id(title)
                     .transition(.opacity.combined(with: .scale(scale: 0.86)))
             }
             .padding(.horizontal, 10)
-            .frame(width: 92, height: 29)
+            .frame(minWidth: 92)
+            .frame(height: 29)
             .contentShape(Capsule())
-            .aiLiquidGlass(
+            .dashboardSurface(
                 tint: accent.opacity(store.isRefreshing ? 0.24 : 0.12),
                 cornerRadius: 15,
                 interactive: true
@@ -1504,7 +1513,7 @@ private struct DashboardRefreshButton: View {
                 .rotationEffect(.degrees(rotation - 90))
             Image(systemName: "arrow.clockwise")
                 .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.white.opacity(0.94))
+                .foregroundStyle(theme.text(0.94))
                 .rotationEffect(.degrees(store.isRefreshing ? rotation : 0))
         }
         .frame(width: 18, height: 18)
@@ -1515,6 +1524,7 @@ private struct DashboardRefreshButton: View {
 private struct DashboardUpdatePrompt: View {
     @ObservedObject private var updater = AppUpdater.shared
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
+    @Environment(\.dashboardTheme) private var theme
 
     @ViewBuilder
     var body: some View {
@@ -1526,16 +1536,16 @@ private struct DashboardUpdatePrompt: View {
                 HStack(spacing: 5) {
                     Image(systemName: "arrow.down.circle.fill")
                         .font(.system(size: 12, weight: .bold))
-                    Text(L10n.text(.update, language: languageSettings.language))
+                    Text(L10n.text(.updateApp, language: languageSettings.language))
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .fixedSize(horizontal: true, vertical: false)
                 }
-                .foregroundStyle(.white.opacity(0.94))
+                .foregroundStyle(theme.text(0.94))
                 .padding(.horizontal, 10)
                 .frame(height: 29)
                 .contentShape(Capsule())
-                .aiLiquidGlass(
-                    tint: DashboardPalette.success.opacity(0.24),
+                .dashboardSurface(
+                    tint: theme.success.opacity(0.24),
                     cornerRadius: 15,
                     interactive: true
                 )
@@ -1566,21 +1576,23 @@ private struct DashboardUpdatePrompt: View {
                 ProgressView(value: progress, total: 1)
                     .progressViewStyle(.circular)
                     .controlSize(.small)
+                    .tint(theme.accent)
             } else {
                 ProgressView()
                     .controlSize(.small)
+                    .tint(theme.accent)
             }
             Text(
                 progress.map { "\(Int(($0 * 100).rounded()))%" } ?? text
             )
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.78))
+                .foregroundStyle(theme.text(0.78))
                 .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.horizontal, 9)
         .frame(height: 29)
-        .aiLiquidGlass(
-            tint: Color.white.opacity(0.10),
+        .dashboardSurface(
+            tint: theme.accent.opacity(0.10),
             cornerRadius: 15,
             interactive: false
         )
@@ -1589,15 +1601,6 @@ private struct DashboardUpdatePrompt: View {
 }
 
 private enum DashboardPalette {
-    static let background = LinearGradient(
-        colors: [Color(red: 0.10, green: 0.11, blue: 0.16), Color(red: 0.14, green: 0.15, blue: 0.21)],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
-    static let accent = Color(red: 0.42, green: 0.69, blue: 1.0)
-    static let success = Color(red: 0.43, green: 0.84, blue: 0.75)
-    static let warning = Color(red: 1.0, green: 0.66, blue: 0.30)
-
     static func color(for provider: ProviderID) -> Color {
         switch provider {
         case .codex: return Color(red: 0.45, green: 0.78, blue: 1.0)

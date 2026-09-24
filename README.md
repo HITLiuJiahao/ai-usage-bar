@@ -22,9 +22,9 @@ Download the latest Apple Silicon (`arm64`) ZIP from [GitHub Releases](https://g
 - Distinguishes the standalone QwenWork client from ZCode and Doubao Work local usage records, and includes KIMI Desktop (Kimi Work and Kimi Code), OpenCode, Qianwen Office Mode, and DeepSeek Harness local usage.
 - Uses a two-column card layout and adjusts its height based on the number of available providers. Click **By Model** to expand model-level details.
 - Displays tokens, input, output, cache reads, cache-hit rate, reasoning tokens, request counts, Credits, subscription windows, and estimated costs.
-- Uses each supported tool's official brand icon in the Dock and dashboard, with a SF Symbol fallback if an icon resource is unavailable.
+- Uses each supported tool's official brand icon in the Dock and dashboard, with a SF Symbol fallback if an icon resource is unavailable. For tools with multiple bundled official icons, choose the preferred variant in Settings; Codex offers the existing OpenAI logo and Codex light/dark icons.
 - Refreshes automatically when the dashboard opens, on a background timer, or manually from the refresh control at the top.
-- Checks GitHub Releases automatically every six hours and shows an in-app update action when a newer version is available. Clicking it downloads the verified package, replaces the current app with rollback protection, and reopens the new version.
+- Checks GitHub Releases daily at 11:00 in the Mac's local time zone and shows an **Update App** button beside the usage refresh control when a newer version is available. If the Mac was asleep or the app was closed, a missed check runs on the next wake or launch. Clicking the button downloads the verified package, replaces the current app with rollback protection, and reopens the new version.
 - Supports multiple server-side accounts, with credentials stored in the macOS Keychain.
 - Supports launching automatically at login.
 - Lets you edit the relative order of AI tools in the edge Dock from settings; the order is saved locally and is also used by the full dashboard.
@@ -32,7 +32,7 @@ Download the latest Apple Silicon (`arm64`) ZIP from [GitHub Releases](https://g
 - Supports Simplified Chinese (default), Traditional Chinese, English, Japanese, Korean, Spanish, French, German, Italian, Brazilian Portuguese, and Russian; the selected interface language applies immediately and is saved locally.
 - Includes an optional original desktop pet: a draggable, transparent, cross-Space companion whose mood reacts to local AI activity. Choose from a cat, bear, fox, succulent, sunflower, or monstera. It automatically follows locally recorded Codex task lifecycle events—running, completed, and blocked—without uploading a rollout log. Right-click it for level/XP, energy, streaks, a seven-day activity chart, live quotas, active-agent timers, and achievements.
 - After the pet is hidden, the app explains how to show it again from the menu bar or Settings; the reminder can be disabled permanently from the prompt.
-- Tracks local pet growth without a cloud account: token deltas and completed sessions feed the pet; it has five evolution stages, 14 achievements, configurable speech bubbles, notification/sound preferences, break reminders, and a rolling 90-day activity/session archive.
+- Tracks local pet growth without a cloud account: token deltas and completed sessions feed the pet; it has five evolution stages, 14 achievements, configurable speech bubbles, a daily morning greeting and late-night rest reminder, notification/sound preferences, break reminders, and a rolling 90-day activity/session archive. If a greeting is missed, hovering over the pet replays it once; both greetings can also be previewed in Desktop Pet settings.
 - Provides a local-only hook bridge for agents that expose lifecycle hooks. `AIUsageBar pet-event --provider … --state …` sends a small JSON event through an owner-only Unix socket; it can include a project path, model name, status message, Token delta, and request count, but never prompts, responses, or credentials.
 - Lets you import original or user-created pet packs (`pet.json` plus a transparent PNG sprite sheet), bind a pack to a project folder, and choose a dedicated project pet when hook events provide that project path.
 - Providers without usable data do not create empty cards; they are listed in small text at the bottom instead.
@@ -159,13 +159,17 @@ xcrun swiftc \
 
 ## Credential Configuration
 
-Manual configuration is usually unnecessary: the app attempts to use the local sign-in state of installed clients. When credentials must be provided explicitly, add an account through the dashboard settings window or use one of these environment variables:
+Manual configuration is only used for MiniMax Code and QwenWork server quotas. Codex and the other providers use their existing local sign-in state and logs; adding a credential for them does not change their dashboard data. For the two supported services, add an account through the dashboard settings window or use one of these environment variables:
 
 | Environment variable | Purpose |
 | --- | --- |
-| `QWENWORK_ACCESS_TOKEN` | QwenWork official Credits API |
-| `MINIMAX_API_KEY` | MiniMax coding plan quota API |
+| `QWENWORK_ACCESS_TOKEN` | QwenWork personal account token for subscription Credits; an enterprise Open Platform API key is not accepted by this adapter |
+| `MINIMAX_API_KEY` | MiniMax Token Plan subscription key for remaining quota; a standard pay-as-you-go API key is not interchangeable |
 Never commit real tokens, API keys, database keys, or local logs to GitHub.
+
+To add MiniMax server quota, sign in to the [MiniMax Token Plan page](https://platform.minimaxi.com/subscribe/token-plan), choose **Get API Key**, and copy the Token Plan subscription key (`sk-cp…`). In **Account Settings → Add Server Account**, select **MiniMax Code**, enter any local account label, paste the key, and click **Add Account**. Refresh the dashboard or wait for its next 30-second refresh, then inspect the MiniMax Code card for the five-hour and weekly quota. The key is saved in the macOS Keychain. A standard pay-as-you-go API key is a different credential and does not query this quota.
+
+QwenWork is an advanced option: if you already have a valid **personal account Access Token**, select **QwenWork**, enter a local account label and the token, add the account, then refresh and inspect the QwenWork card for subscription Credits. The app does not extract the token from QwenWork's protected Electron sign-in storage, and there is no documented end-user token export flow. QwenWork's [enterprise Open Platform API key](https://qwenwork.cn/docs/developer/enterprise/get-quota-balance) belongs to a different endpoint and will not work in this form. Local QwenWork activity can still be read without adding a credential.
 
 ## Settings and Accounts
 
@@ -173,7 +177,7 @@ Click the gear icon in the upper-right corner of the dashboard, or right-click t
 
 1. Enable or disable launch at login under **App Settings**.
 2. Use **Software Update** to check GitHub Releases manually or install a detected update.
-3. Select a product under **Add Server Account**, then enter an account name and an access token/API key.
+3. Under **Add Server Account**, select **MiniMax Code** or **QwenWork** and provide the corresponding credential described above. The account name is a label shown only in this app.
 4. Credentials for added accounts are stored in the macOS Keychain. Account metadata is stored at:
 
    ```text
@@ -181,10 +185,11 @@ Click the gear icon in the upper-right corner of the dashboard, or right-click t
    ```
 
 5. Removing an account only deletes the account configuration saved by AI Usage Bar. It does not delete local data belonging to the corresponding client.
-6. Adjust the **Sidebar AI Tool Order** section by dragging tools or using the up/down controls. The order is retained across launches, and **Restore Default** returns to the built-in order.
-7. Choose the **Sidebar Expansion** position: the right edge, left edge, both edges, or **Disable the sidebar**. With the sidebar disabled, clicking the menu bar icon opens the full overview directly.
-8. Choose a language in the **Language** section. The default is Simplified Chinese; Traditional Chinese, English, Japanese, Korean, Spanish, French, German, Italian, Brazilian Portuguese, and Russian are also available. The selection applies immediately and is retained across launches.
-9. Use the **Desktop Pet** section to show/hide the companion, adjust its size and opacity, enable break reminders or notifications, import a pet pack, set optional custom messages, bind project folders, and inspect achievements/session history. Clicking a pet feeds it; right-clicking opens its HUD.
+6. Choose a preferred icon in **AI Tool Icons** when a tool has more than one bundled official icon. The selection applies immediately across the app and is saved for future launches.
+7. Adjust the **Sidebar AI Tool Order** section by dragging tools or using the up/down controls. The order is retained across launches, and **Restore Default** returns to the built-in order.
+8. Choose the **Sidebar Expansion** position: the right edge, left edge, both edges, or **Disable the sidebar**. With the sidebar disabled, clicking the menu bar icon opens the full overview directly.
+9. Choose a language in the **Language** section. The default is Simplified Chinese; Traditional Chinese, English, Japanese, Korean, Spanish, French, German, Italian, Brazilian Portuguese, and Russian are also available. The selection applies immediately and is retained across launches.
+10. Use the **Desktop Pet** section to show/hide the companion, adjust its size and opacity, enable break reminders or notifications, import a pet pack, set optional custom messages, bind project folders, and inspect achievements/session history. Clicking a pet feeds it; right-clicking opens its HUD.
 
 ### Desktop Pet Hook Bridge
 
@@ -277,8 +282,7 @@ If the first full read fails, the app retries automatically. When an individual 
 
 Codex subscription quotas are refreshed automatically every 30 seconds. A successful quota response is cached for at most 15 seconds, and a manual refresh bypasses that cache and the local HTTP response cache. The upstream service can still take some time to reflect a just-completed request.
 
-Application updates are checked against the public GitHub Releases API every six hours (and can be checked manually in Settings). If that API is rate-limited or temporarily unavailable, the updater falls back to GitHub's public `releases/latest` redirect plus the published ZIP SHA-256 sidecar. An update is considered installable only when it has a compatible ZIP asset and a verified SHA-256 value. The package is unpacked into a private temporary directory, checked for the expected bundle identifier, executable, version, and code signature, then installed by a short-lived helper script that keeps a backup until the new app has been validated and reopened.
-Application updates are checked against the public GitHub Releases API every six hours (and can be checked manually in Settings). If that API is rate-limited or temporarily unavailable, the updater falls back to GitHub's public `releases/latest` redirect plus the published ZIP SHA-256 sidecar. An update is considered installable only when it has a compatible ZIP asset and a verified SHA-256 value. The package is unpacked into a private temporary directory, checked for the expected bundle identifier, executable, version, and code signature, then installed by a short-lived helper script that keeps a backup until the new app has been validated and reopened.
+Application updates are checked against the public GitHub Releases API daily at 11:00 local time (and can be checked manually in Settings). If that API is rate-limited or temporarily unavailable, the updater falls back to GitHub's public `releases/latest` redirect plus the published ZIP SHA-256 sidecar. An update is considered installable only when it has a compatible ZIP asset and a verified SHA-256 value. The package is unpacked into a private temporary directory, checked for the expected bundle identifier, executable, version, and code signature, then installed by a short-lived helper script that keeps a backup until the new app has been validated and reopened.
 
 ## Known Limitations
 

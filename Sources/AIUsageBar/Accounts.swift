@@ -106,12 +106,16 @@ enum LocalAccountStore {
 @MainActor
 final class AccountSettingsStore: ObservableObject {
     @Published var accounts: [SavedAccount] = LocalAccountStore.allAccounts()
-    @Published var provider: ProviderID = .codex
+    @Published var provider: ProviderID = .miniMax
     @Published var name = ""
     @Published var credential = ""
     @Published var errorMessage: String?
 
     func addAccount() {
+        guard ProviderID.manuallyConfigurableCases.contains(provider) else {
+            errorMessage = "此产品不支持手动添加服务端凭据。"
+            return
+        }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCredential = credential.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty, !trimmedCredential.isEmpty else {

@@ -118,7 +118,7 @@ enum PetEventCommand {
         guard let provider = values["provider"],
               let state = values["state"]
         else {
-            FileHandle.standardError.write(Data("Usage: AIUsageBar pet-event --provider <id> --state <working|waiting|blocked|done> [--project <path>] [--message <text>] [--model <name>] [--reasoning-effort <level>] [--subagent] [--tokens <n>] [--requests <n>] [--session <id>]\n".utf8))
+            FileHandle.standardError.write(Data("Usage: AIUsageBar pet-event --provider <id> --state <working|waiting|blocked|done> [--project <path>] [--message <text>] [--model <name>] [--reasoning-effort <level>] [--subagent] [--subagent-name <name>] [--tokens <n>] [--requests <n>] [--session <id>]\n".utf8))
             return true
         }
         let event = PetHookEvent(
@@ -129,7 +129,9 @@ enum PetEventCommand {
             message: values["message"],
             model: values["model"],
             reasoningEffort: values["reasoning-effort"],
-            isSubagent: values["subagent"].map { ["1", "true", "yes"].contains($0.lowercased()) },
+            isSubagent: values["subagent"].map { ["1", "true", "yes"].contains($0.lowercased()) }
+                ?? values["subagent-name"].map { _ in true },
+            subagentName: values["subagent-name"],
             tokens: values["tokens"].flatMap(Double.init),
             requests: values["requests"].flatMap(Double.init),
             timestamp: Date()

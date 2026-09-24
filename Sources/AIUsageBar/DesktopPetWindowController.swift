@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CoreGraphics
 import QuartzCore
 import SwiftUI
 
@@ -17,6 +18,10 @@ final class DesktopPetWindowController: NSObject {
     private var rightClickMonitor: Any?
     private var screenObserver: Any?
     private var hideReminderObserver: Any?
+    private var sessionActiveObserver: Any?
+    private var sessionInactiveObserver: Any?
+    private var ownerGreetingTimer: Timer?
+    private var ownerSessionActive = true
     private var statsPopover: NSPopover?
     private var hotKeyController: DesktopPetHotKeyController?
     private var petAnimationTask: Task<Void, Never>?
@@ -81,6 +86,34 @@ final class DesktopPetWindowController: NSObject {
                 self?.showHideReminderIfNeeded()
             }
         }
+        let workspaceNotifications = NSWorkspace.shared.notificationCenter
+        sessionActiveObserver = workspaceNotifications.addObserver(
+            forName: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.ownerSessionActive = true
+                self?.greetOwnerIfPresent()
+            }
+        }
+        sessionInactiveObserver = workspaceNotifications.addObserver(
+            forName: NSWorkspace.sessionDidResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.ownerSessionActive = false
+            }
+        }
+        let greetingTimer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.greetOwnerIfPresent()
+            }
+        }
+        greetingTimer.tolerance = 5
+        RunLoop.main.add(greetingTimer, forMode: .common)
+        ownerGreetingTimer = greetingTimer
         hotKeyController = DesktopPetHotKeyController { [weak self] action in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -107,6 +140,10 @@ final class DesktopPetWindowController: NSObject {
         if let rightClickMonitor { NSEvent.removeMonitor(rightClickMonitor) }
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
         if let hideReminderObserver { NotificationCenter.default.removeObserver(hideReminderObserver) }
+        let workspaceNotifications = NSWorkspace.shared.notificationCenter
+        if let sessionActiveObserver { workspaceNotifications.removeObserver(sessionActiveObserver) }
+        if let sessionInactiveObserver { workspaceNotifications.removeObserver(sessionInactiveObserver) }
+        ownerGreetingTimer?.invalidate()
         hotKeyController = nil
     }
 
@@ -120,11 +157,12 @@ final class DesktopPetWindowController: NSObject {
         store.setEnabled(true)
 
         if !wasVisible {
-            beginPetEntrance(panel, restingOrigin: panel.frame.origin)
+            beginPetEntrance(panel, restingOrigin: restingOrigin)
         } else if wasAnimating {
             recoverPetToRestingPosition(panel, restingOrigin: restingOrigin)
         } else {
             panel.orderFrontRegardless()
+            greetOwnerIfPresent()
         }
     }
 
@@ -143,6 +181,7 @@ final class DesktopPetWindowController: NSObject {
               !store.animationPhase.isLeaving
         else { return }
 
+        let shouldWave = store.animationPhase == .idle
         let restingOrigin = animationHomeOrigin ?? panel.frame.origin
         cancelPetAnimation()
         animationHomeOrigin = restingOrigin
@@ -164,13 +203,18 @@ final class DesktopPetWindowController: NSObject {
         }
 
         let route = animationRoute(for: panel, restingOrigin: restingOrigin)
-        store.setAnimationPhase(.waving)
+        let travelDuration = petTravelDuration(from: restingOrigin, to: route.offscreenOrigin, entering: false)
+        if shouldWave {
+            store.setAnimationPhase(.waving)
+        }
         let generation = petAnimationGeneration
         petAnimationTask = Task { @MainActor [weak self] in
-            do {
-                try await Task.sleep(nanoseconds: 500_000_000)
-            } catch {
-                return
+            if shouldWave {
+                do {
+                    try await Task.sleep(nanoseconds: 320_000_000)
+                } catch {
+                    return
+                }
             }
             guard let self,
                   self.petAnimationGeneration == generation,
@@ -180,12 +224,12 @@ final class DesktopPetWindowController: NSObject {
             self.store.setAnimationPhase(.running(route.edge))
             self.animatePanel(
                 to: route.offscreenOrigin,
-                duration: 1.04,
+                duration: travelDuration,
                 timingFunction: .easeIn
             )
 
             do {
-                try await Task.sleep(nanoseconds: 1_040_000_000)
+                try await Task.sleep(nanoseconds: UInt64(travelDuration * 1_000_000_000))
             } catch {
                 return
             }
@@ -296,6 +340,7 @@ final class DesktopPetWindowController: NSObject {
         if store.preferences.isEnabled {
             if panel.isVisible {
                 panel.orderFrontRegardless()
+                greetOwnerIfPresent()
             } else {
                 beginPetEntrance(panel, restingOrigin: panel.frame.origin)
             }
@@ -325,28 +370,33 @@ final class DesktopPetWindowController: NSObject {
                 self.store.setAnimationPhase(.idle)
                 self.animationHomeOrigin = nil
                 self.petAnimationTask = nil
+                self.resizePanelIfNeeded()
+                self.greetOwnerIfPresent()
             }
             return
         }
 
-        // Show at the saved location immediately so the user never has to
-        // search the screen for a pet traveling in from an unknown edge.
-        setPanelOriginImmediately(restingOrigin)
+        // Enter from the closest edge, then settle exactly where the user
+        // placed the pet. The reverse path is used when it leaves.
+        setPanelOriginImmediately(route.offscreenOrigin)
         store.setAnimationPhase(.arriving(route.edge))
         panel.orderFrontRegardless()
+        let travelDuration = petTravelDuration(from: route.offscreenOrigin, to: restingOrigin, entering: true)
+        animatePanel(to: restingOrigin, duration: travelDuration, timingFunction: .easeOut)
 
         let generation = petAnimationGeneration
         petAnimationTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(nanoseconds: 180_000_000)
+                try await Task.sleep(nanoseconds: UInt64(travelDuration * 1_000_000_000))
             } catch {
                 return
             }
             guard let self, self.petAnimationGeneration == generation, !Task.isCancelled else { return }
+            self.setPanelOriginImmediately(restingOrigin)
             self.store.setAnimationPhase(.landing)
 
             do {
-                try await Task.sleep(nanoseconds: 280_000_000)
+                try await Task.sleep(nanoseconds: 260_000_000)
             } catch {
                 return
             }
@@ -354,7 +404,27 @@ final class DesktopPetWindowController: NSObject {
             self.store.setAnimationPhase(.idle)
             self.animationHomeOrigin = nil
             self.petAnimationTask = nil
+            self.resizePanelIfNeeded()
+            self.greetOwnerIfPresent()
         }
+    }
+
+    private static let anyInputEventType = CGEventType(rawValue: UInt32.max)!
+
+    private func greetOwnerIfPresent() {
+        guard ownerSessionActive,
+              store.preferences.isEnabled,
+              store.preferences.showMessages,
+              store.ownerGreeting == nil,
+              panel?.isVisible == true,
+              store.animationPhase == .idle
+        else { return }
+        let idleSeconds = CGEventSource.secondsSinceLastEventType(
+            .combinedSessionState,
+            eventType: Self.anyInputEventType
+        )
+        guard idleSeconds.isFinite, idleSeconds >= 0, idleSeconds <= 120 else { return }
+        store.greetOwnerIfNeeded()
     }
 
     private func recoverPetToRestingPosition(_ panel: NSPanel, restingOrigin: NSPoint) {
@@ -381,6 +451,8 @@ final class DesktopPetWindowController: NSObject {
             self.store.setAnimationPhase(.idle)
             self.animationHomeOrigin = nil
             self.petAnimationTask = nil
+            self.resizePanelIfNeeded()
+            self.greetOwnerIfPresent()
         }
     }
 
@@ -447,6 +519,14 @@ final class DesktopPetWindowController: NSObject {
         return PetAnimationRoute(edge: edge, offscreenOrigin: offscreenOrigin)
     }
 
+    private func petTravelDuration(from start: NSPoint, to end: NSPoint, entering: Bool) -> TimeInterval {
+        let distance = Double(hypot(end.x - start.x, end.y - start.y))
+        if entering {
+            return min(0.72, max(0.42, 0.33 + distance / 950))
+        }
+        return min(0.64, max(0.32, 0.24 + distance / 1_250))
+    }
+
     private func intersectionArea(_ lhs: NSRect, _ rhs: NSRect) -> CGFloat {
         let intersection = lhs.intersection(rhs)
         guard !intersection.isNull else { return 0 }
@@ -478,6 +558,9 @@ final class DesktopPetWindowController: NSObject {
 
     private func resizePanelIfNeeded() {
         guard let panel else { return }
+        // A session update must not clamp the panel back onscreen while the
+        // pet is crossing the edge. Resize once it has reached its resting spot.
+        guard animationHomeOrigin == nil else { return }
         let targetSize = desiredSize
         guard abs(panel.frame.width - targetSize.width) > 0.5 || abs(panel.frame.height - targetSize.height) > 0.5 else { return }
         let current = panel.frame

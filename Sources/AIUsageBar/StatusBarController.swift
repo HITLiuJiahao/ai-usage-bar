@@ -159,10 +159,7 @@ final class StatusBarController: NSObject, ObservableObject, NSWindowDelegate {
                 sidebarDisabled: edgeDockExpansionSettings.mode.isDisabled
             )
         } else {
-            button.image = NSImage(
-                systemSymbolName: "gauge.medium",
-                accessibilityDescription: L10n.text(.overviewTitle)
-            )
+            button.image = BrandPulseStatusImage.make()
             button.attributedTitle = NSAttributedString(string: "")
             button.imagePosition = .imageOnly
             button.toolTip = L10n.text(.overviewTitle)

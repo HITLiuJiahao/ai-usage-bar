@@ -20,6 +20,47 @@ enum DesktopPetMood: String, Codable, CaseIterable {
     case resting
 }
 
+enum PetOwnerGreeting {
+    case morning
+    case lateNight
+
+    var defaultsKey: String {
+        switch self {
+        case .morning: return "AIUsageBar.desktopPet.lastMorningGreetingDay"
+        case .lateNight: return "AIUsageBar.desktopPet.lastNightGreetingDay"
+        }
+    }
+
+    var hoverReplayKey: String {
+        switch self {
+        case .morning: return "AIUsageBar.desktopPet.lastMorningGreetingHoverDay"
+        case .lateNight: return "AIUsageBar.desktopPet.lastNightGreetingHoverDay"
+        }
+    }
+
+    static func occasion(
+        at date: Date,
+        calendar: Calendar = .current
+    ) -> (greeting: PetOwnerGreeting, day: Date)? {
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        guard let hour = components.hour, let minute = components.minute else { return nil }
+        let timeOfDay = hour * 60 + minute
+
+        // Keep morning aligned with the pet's existing early-bird achievement.
+        if timeOfDay >= 5 * 60 && timeOfDay < 12 * 60 {
+            return (.morning, calendar.startOfDay(for: date))
+        }
+        if timeOfDay >= 22 * 60 + 30 {
+            return (.lateNight, calendar.startOfDay(for: date))
+        }
+        if timeOfDay < 5 * 60 {
+            let previousDay = calendar.date(byAdding: .day, value: -1, to: date) ?? date
+            return (.lateNight, calendar.startOfDay(for: previousDay))
+        }
+        return nil
+    }
+}
+
 enum DesktopPetScreenEdge: Equatable {
     case left
     case right
@@ -284,6 +325,7 @@ struct PetHookEvent: Codable, Hashable {
     var model: String?
     var reasoningEffort: String? = nil
     var isSubagent: Bool? = nil
+    var subagentName: String? = nil
     var tokens: Double?
     var requests: Double?
     var timestamp: Date?
@@ -300,6 +342,7 @@ struct PetActiveAgentSession: Codable, Identifiable, Hashable {
     var model: String?
     var reasoningEffort: String? = nil
     var isSubagent: Bool? = nil
+    var subagentName: String? = nil
     var mood: DesktopPetMood
     var createdAt: Date
     var stateSince: Date
@@ -412,6 +455,7 @@ final class DesktopPetStore: ObservableObject {
     @Published private(set) var mood: DesktopPetMood = .idle
     @Published private(set) var animationPhase: DesktopPetAnimationPhase = .idle
     @Published private(set) var speech: String = ""
+    @Published private(set) var ownerGreeting: PetOwnerGreeting?
     @Published private(set) var activeProvider: ProviderID?
     @Published private(set) var activeProjectPath: String?
     @Published private(set) var quotaRows: [DesktopPetQuotaRow] = []
@@ -423,6 +467,7 @@ final class DesktopPetStore: ObservableObject {
     private var observationBaseline: [ProviderID: TodayProviderTotals] = [:]
     private var hasObservationBaseline = false
     private var moodResetTask: Task<Void, Never>?
+    private var ownerGreetingTask: Task<Void, Never>?
     private var breakTimer: Timer?
     private var completedHookSessions = Set<String>()
     private let codexActivityMonitor = CodexPetActivityMonitor()
@@ -509,6 +554,7 @@ final class DesktopPetStore: ObservableObject {
         codexActivityTimer?.invalidate()
         codexActivityTask?.cancel()
         moodResetTask?.cancel()
+        ownerGreetingTask?.cancel()
     }
 
     var selectedPack: PetPack {
@@ -549,6 +595,7 @@ final class DesktopPetStore: ObservableObject {
     func setEnabled(_ enabled: Bool) {
         let wasEnabled = preferences.isEnabled
         preferences.isEnabled = enabled
+        if !enabled { clearOwnerGreeting() }
         persist()
         if wasEnabled && !enabled {
             NotificationCenter.default.post(
@@ -564,7 +611,64 @@ final class DesktopPetStore: ObservableObject {
 
     func setShowMessages(_ enabled: Bool) {
         preferences.showMessages = enabled
+        if !enabled { clearOwnerGreeting() }
         persist()
+    }
+
+    func greetOwnerIfNeeded(at date: Date = Date()) {
+        guard preferences.isEnabled,
+              preferences.showMessages,
+              let occasion = PetOwnerGreeting.occasion(at: date)
+        else { return }
+        let defaults = UserDefaults.standard
+        guard !Self.didGreet(on: occasion.day, forKey: occasion.greeting.defaultsKey) else { return }
+
+        defaults.set(occasion.day, forKey: occasion.greeting.defaultsKey)
+        showOwnerGreeting(occasion.greeting)
+    }
+
+    func greetOwnerOnHoverIfNeeded(at date: Date = Date()) {
+        guard preferences.isEnabled,
+              preferences.showMessages,
+              let occasion = PetOwnerGreeting.occasion(at: date),
+              !Self.didGreet(on: occasion.day, forKey: occasion.greeting.hoverReplayKey)
+        else { return }
+
+        let defaults = UserDefaults.standard
+        defaults.set(occasion.day, forKey: occasion.greeting.hoverReplayKey)
+        defaults.set(occasion.day, forKey: occasion.greeting.defaultsKey)
+        showOwnerGreeting(occasion.greeting)
+    }
+
+    func previewOwnerGreeting(_ greeting: PetOwnerGreeting) {
+        guard preferences.isEnabled, preferences.showMessages else { return }
+        showOwnerGreeting(greeting)
+    }
+
+    private static func didGreet(on day: Date, forKey key: String) -> Bool {
+        guard let lastDay = UserDefaults.standard.object(forKey: key) as? Date else { return false }
+        return Calendar.current.isDate(lastDay, inSameDayAs: day)
+    }
+
+    private func showOwnerGreeting(_ greeting: PetOwnerGreeting) {
+        ownerGreetingTask?.cancel()
+        ownerGreeting = greeting
+        ownerGreetingTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: 16_000_000_000)
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self?.ownerGreeting = nil
+            self?.ownerGreetingTask = nil
+        }
+    }
+
+    private func clearOwnerGreeting() {
+        ownerGreetingTask?.cancel()
+        ownerGreetingTask = nil
+        ownerGreeting = nil
     }
 
     @discardableResult
@@ -760,6 +864,8 @@ final class DesktopPetStore: ObservableObject {
             activeSessions[index].reasoningEffort = event.reasoningEffort
                 ?? activeSessions[index].reasoningEffort
             activeSessions[index].isSubagent = event.isSubagent ?? activeSessions[index].isSubagent
+            activeSessions[index].subagentName = event.subagentName
+                ?? activeSessions[index].subagentName
             activeSessions[index].mood = mood
             activeSessions[index].updatedAt = now
             if stateChanged { activeSessions[index].stateSince = now }
@@ -772,6 +878,7 @@ final class DesktopPetStore: ObservableObject {
                 model: event.model,
                 reasoningEffort: event.reasoningEffort,
                 isSubagent: event.isSubagent,
+                subagentName: event.subagentName,
                 mood: mood,
                 createdAt: now,
                 stateSince: now,
@@ -1181,6 +1288,7 @@ final class DesktopPetStore: ObservableObject {
             model: activity.model,
             reasoningEffort: activity.reasoningEffort,
             isSubagent: activity.isSubagent,
+            subagentName: activity.subagentName,
             tokens: nil,
             requests: nil,
             timestamp: activity.updatedAt
@@ -1403,6 +1511,78 @@ enum PetNotificationCenter {
 @MainActor
 enum PetText {
     private static var language: AppLanguage { AppLanguageSettings.shared.language }
+
+    static func ownerGreeting(_ greeting: PetOwnerGreeting) -> String {
+        switch greeting {
+        case .morning: return morningGreeting
+        case .lateNight: return lateNightGreeting
+        }
+    }
+
+    static func previewGreetingLabel(_ greeting: PetOwnerGreeting) -> String {
+        switch greeting {
+        case .morning:
+            switch language {
+            case .simplifiedChinese: return "预览早安"
+            case .traditionalChinese: return "預覽早安"
+            case .english: return "Preview morning"
+            case .japanese: return "朝の挨拶を確認"
+            case .korean: return "아침 인사 미리 보기"
+            case .spanish: return "Vista previa matutina"
+            case .french: return "Aperçu du matin"
+            case .german: return "Morgengruß ansehen"
+            case .italian: return "Anteprima del buongiorno"
+            case .portugueseBrazil: return "Prévia da manhã"
+            case .russian: return "Утреннее приветствие"
+            }
+        case .lateNight:
+            switch language {
+            case .simplifiedChinese: return "预览晚安"
+            case .traditionalChinese: return "預覽晚安"
+            case .english: return "Preview late night"
+            case .japanese: return "夜の挨拶を確認"
+            case .korean: return "밤 인사 미리 보기"
+            case .spanish: return "Vista previa nocturna"
+            case .french: return "Aperçu du soir"
+            case .german: return "Abendgruß ansehen"
+            case .italian: return "Anteprima della buonanotte"
+            case .portugueseBrazil: return "Prévia da noite"
+            case .russian: return "Вечернее напоминание"
+            }
+        }
+    }
+
+    private static var morningGreeting: String {
+        switch language {
+        case .simplifiedChinese: return "早上好，主人！今天也一起加油。"
+        case .traditionalChinese: return "早安，主人！今天也一起加油。"
+        case .english: return "Good morning! I'm happy to see you."
+        case .japanese: return "おはようございます！今日も一緒にがんばりましょう。"
+        case .korean: return "좋은 아침이에요! 오늘도 함께해요."
+        case .spanish: return "¡Buenos días! Me alegra verte."
+        case .french: return "Bonjour ! Je suis ravi de vous voir."
+        case .german: return "Guten Morgen! Schön, dich zu sehen."
+        case .italian: return "Buongiorno! Che bello vederti."
+        case .portugueseBrazil: return "Bom dia! Que bom ver você."
+        case .russian: return "Доброе утро! Рад тебя видеть."
+        }
+    }
+
+    private static var lateNightGreeting: String {
+        switch language {
+        case .simplifiedChinese: return "夜深啦，主人，早点休息哦。"
+        case .traditionalChinese: return "夜深了，主人，早點休息喔。"
+        case .english: return "It's getting late. Please get some rest."
+        case .japanese: return "夜も遅いですよ。そろそろ休みましょう。"
+        case .korean: return "밤이 늦었어요. 이제 쉬어가요."
+        case .spanish: return "Ya es tarde. Descansa pronto."
+        case .french: return "Il se fait tard. Reposez-vous."
+        case .german: return "Es ist spät. Ruh dich bald aus."
+        case .italian: return "Si è fatto tardi. Riposati."
+        case .portugueseBrazil: return "Está tarde. Descanse um pouco."
+        case .russian: return "Уже поздно. Пора отдохнуть."
+        }
+    }
 
     static var idle: String {
         switch language {

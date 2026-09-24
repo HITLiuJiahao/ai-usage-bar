@@ -64,9 +64,7 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
 
     static let repositoryOwner = "HITLiuJiahao"
     static let repositoryName = "ai-usage-bar"
-    static let automaticCheckInterval: TimeInterval = 6 * 60 * 60
-
-    private static let lastCheckDefaultsKey = "aiUsageBar.lastUpdateCheck"
+    private static let lastAutomaticCheckDefaultsKey = "aiUsageBar.lastAutomaticUpdateCheck"
     private static let currentVersionFallback = "0.3.1"
     private static let releaseAssetName = "AIUsageBar-arm64.zip"
 
@@ -81,6 +79,9 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     )!
     private var session: URLSession!
     private var automaticCheckTimer: Timer?
+    private var wakeObserver: NSObjectProtocol?
+    private var clockObserver: NSObjectProtocol?
+    private var timeZoneObserver: NSObjectProtocol?
     private var metadataTask: URLSessionDataTask?
     private var releasePageTask: URLSessionDataTask?
     private var checksumTask: URLSessionDataTask?
@@ -88,6 +89,7 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     private var expectedSHA256: String?
     private var activeRelease: AppUpdateRelease?
     private var activeCheckIdentifier: UUID?
+    private var retainedAvailableRelease: AppUpdateRelease?
     private var isManualCheck = false
 
     static var currentVersion: String {
@@ -115,42 +117,103 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
 
     deinit {
         automaticCheckTimer?.invalidate()
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+        }
+        if let clockObserver {
+            NotificationCenter.default.removeObserver(clockObserver)
+        }
+        if let timeZoneObserver {
+            NotificationCenter.default.removeObserver(timeZoneObserver)
+        }
         cancelCheckTasks()
         downloadTask?.cancel()
         session.invalidateAndCancel()
     }
 
     func startAutomaticChecks() {
-        guard automaticCheckTimer == nil else { return }
+        guard wakeObserver == nil else { return }
 
-        let timer = Timer.scheduledTimer(
-            withTimeInterval: Self.automaticCheckInterval,
-            repeats: true
+        let workspaceCenter = NSWorkspace.shared.notificationCenter
+        wakeObserver = workspaceCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
         ) { [weak self] _ in
-            self?.checkForUpdate(manual: false)
+            self?.runAutomaticCheckIfDue()
         }
-        timer.tolerance = 5 * 60
-        automaticCheckTimer = timer
+        clockObserver = NotificationCenter.default.addObserver(
+            forName: .NSSystemClockDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.runAutomaticCheckIfDue()
+        }
+        timeZoneObserver = NotificationCenter.default.addObserver(
+            forName: .NSSystemTimeZoneDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.runAutomaticCheckIfDue()
+        }
 
-        guard shouldCheckAutomatically else { return }
-        // Let the menu-bar app finish its first local scan before making the
-        // optional network request. A failed update check must never delay UI.
+        scheduleNextAutomaticCheck(after: Date())
+        // Let the menu-bar app finish its first local scan before any missed
+        // 11:00 check. The timer still handles an 11:00 boundary meanwhile.
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-            self?.checkForUpdate(manual: false)
+            self?.runAutomaticCheckIfDue()
         }
+    }
+
+    private func runAutomaticCheckIfDue() {
+        automaticCheckTimer?.invalidate()
+        automaticCheckTimer = nil
+
+        let now = Date()
+        let lastAttempt = UserDefaults.standard.object(
+            forKey: Self.lastAutomaticCheckDefaultsKey
+        ) as? Date
+        if UpdateCheckSchedule.isDue(at: now, lastAttempt: lastAttempt) {
+            if state.isBusy {
+                scheduleAutomaticCheck(at: now.addingTimeInterval(60))
+                return
+            }
+            UserDefaults.standard.set(now, forKey: Self.lastAutomaticCheckDefaultsKey)
+            checkForUpdate(manual: false)
+        }
+        scheduleNextAutomaticCheck(after: now)
+    }
+
+    private func scheduleNextAutomaticCheck(after now: Date) {
+        guard let next = UpdateCheckSchedule.nextCheck(after: now) else { return }
+        scheduleAutomaticCheck(at: next)
+    }
+
+    private func scheduleAutomaticCheck(at date: Date) {
+        automaticCheckTimer?.invalidate()
+        let timer = Timer(fire: date, interval: 0, repeats: false) { [weak self] _ in
+            self?.runAutomaticCheckIfDue()
+        }
+        timer.tolerance = 10
+        RunLoop.main.add(timer, forMode: .common)
+        automaticCheckTimer = timer
     }
 
     func checkForUpdate(manual: Bool = true) {
         guard !state.isBusy else { return }
-        // A visible update should stay available until the user installs it,
-        // rather than being replaced by a later background check.
-        if case .available = state { return }
+        // Scheduled checks can discover a newer release while keeping a
+        // previously found update available if the recheck fails.
+        if case .available(let release) = state {
+            guard !manual else { return }
+            retainedAvailableRelease = release
+        } else {
+            retainedAvailableRelease = nil
+        }
 
         cancelCheckTasks()
         let checkIdentifier = UUID()
         activeCheckIdentifier = checkIdentifier
         isManualCheck = manual
-        UserDefaults.standard.set(Date(), forKey: Self.lastCheckDefaultsKey)
         state = .checking
         startMetadataCheck(checkIdentifier)
     }
@@ -208,15 +271,6 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         let bundleURL = Bundle.main.bundleURL.standardizedFileURL
         guard bundleURL.pathExtension.lowercased() == "app" else { return nil }
         return bundleURL
-    }
-
-    private var shouldCheckAutomatically: Bool {
-        guard let lastCheck = UserDefaults.standard.object(
-            forKey: Self.lastCheckDefaultsKey
-        ) as? Date else {
-            return true
-        }
-        return Date().timeIntervalSince(lastCheck) >= Self.automaticCheckInterval
     }
 
     private func handleMetadataResponse(
@@ -438,6 +492,8 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     private func finishCheck(_ result: Result<AppUpdateRelease?, AppUpdateFailure>) {
         activeCheckIdentifier = nil
         cancelCheckTasks()
+        let retainedRelease = retainedAvailableRelease
+        retainedAvailableRelease = nil
         switch result {
         case .success(let release):
             if let release {
@@ -446,7 +502,9 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
                 setTransientState(.upToDate, delay: isManualCheck ? 4 : 2)
             }
         case .failure(let failure):
-            if isManualCheck {
+            if let retainedRelease {
+                state = .available(retainedRelease)
+            } else if isManualCheck {
                 setTransientState(.failed(failure), delay: 6)
             } else {
                 state = .idle
@@ -467,11 +525,15 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
         checksumTask = nil
     }
 
-    private func setTransientState(_ nextState: AppUpdateState, delay: TimeInterval) {
+    private func setTransientState(
+        _ nextState: AppUpdateState,
+        delay: TimeInterval,
+        then finalState: AppUpdateState = .idle
+    ) {
         state = nextState
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.state == nextState else { return }
-            self.state = .idle
+            self.state = finalState
         }
     }
 
@@ -542,7 +604,8 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
             install(
                 workspace: workspace,
                 candidateURL: candidateURL,
-                appURL: installedAppURL!
+                appURL: installedAppURL!,
+                release: activeRelease
             )
         } catch let error as AppUpdateValidationError {
             try? fileManager.removeItem(at: workspace.rootURL)
@@ -598,10 +661,15 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     }
 
     private func failDownload(_ failure: AppUpdateFailure) {
+        let retryRelease = activeRelease
         expectedSHA256 = nil
         activeRelease = nil
         downloadTask = nil
-        setTransientState(.failed(failure), delay: 6)
+        setTransientState(
+            .failed(failure),
+            delay: 6,
+            then: retryRelease.map { .available($0) } ?? .idle
+        )
     }
 
     // MARK: - Install
@@ -609,7 +677,8 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
     private func install(
         workspace: UpdateWorkspace,
         candidateURL: URL,
-        appURL: URL
+        appURL: URL,
+        release: AppUpdateRelease
     ) {
         state = .installing
         let backupURL = appURL.deletingLastPathComponent().appendingPathComponent(
@@ -628,7 +697,7 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
             )
         } catch {
             try? fileManager.removeItem(at: workspace.rootURL)
-            setTransientState(.failed(.installation), delay: 6)
+            setTransientState(.failed(.installation), delay: 6, then: .available(release))
             return
         }
 
@@ -648,7 +717,7 @@ final class AppUpdater: NSObject, ObservableObject, URLSessionDownloadDelegate {
             try process.run()
         } catch {
             try? fileManager.removeItem(at: workspace.rootURL)
-            setTransientState(.failed(.installation), delay: 6)
+            setTransientState(.failed(.installation), delay: 6, then: .available(release))
             return
         }
 

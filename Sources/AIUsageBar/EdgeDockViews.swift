@@ -4,22 +4,29 @@ import SwiftUI
 struct ProviderLogo: View {
     let provider: ProviderID
     let size: CGFloat
+    let variantID: String?
     let fallbackColor: Color
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
+    @ObservedObject private var iconSettings = ProviderIconSettings.shared
 
     init(
         provider: ProviderID,
         size: CGFloat = 24,
+        variantID: String? = nil,
         fallbackColor: Color = .white
     ) {
         self.provider = provider
         self.size = size
+        self.variantID = variantID
         self.fallbackColor = fallbackColor
     }
 
     var body: some View {
         Group {
-            if let image = Self.image(for: provider) {
+            if let image = Self.image(
+                for: provider,
+                selectedID: variantID ?? iconSettings.selectedID(for: provider)
+            ) {
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
@@ -36,32 +43,24 @@ struct ProviderLogo: View {
         )
     }
 
-    private static func image(for provider: ProviderID) -> NSImage? {
-        guard let resourceName = resourceName(for: provider),
+    private static let imageCache = NSCache<NSString, NSImage>()
+
+    private static func image(for provider: ProviderID, selectedID: String) -> NSImage? {
+        guard let resourceName = ProviderIconCatalog.resourceName(for: provider, selectedID: selectedID)
+        else { return nil }
+        let cacheKey = resourceName as NSString
+        if let cached = imageCache.object(forKey: cacheKey) { return cached }
+        guard
               let resourceURL = Bundle.main.url(
                   forResource: resourceName,
                   withExtension: "png",
                   subdirectory: "ProviderIcons"
-              )
+              ),
+              let image = NSImage(contentsOf: resourceURL)
         else { return nil }
 
-        return NSImage(contentsOf: resourceURL)
-    }
-
-    private static func resourceName(for provider: ProviderID) -> String? {
-        switch provider {
-        case .codex: return "provider-codex"
-        case .kimi: return "provider-kimi"
-        case .qwenWork: return "provider-qwen-work"
-        case .zcode: return "provider-zcode"
-        case .doubaoWork: return "provider-doubao-work"
-        case .workBuddy: return "provider-workbuddy"
-        case .miniMax: return "provider-minimax"
-        case .openCode: return "provider-open-code"
-        case .qianwenOffice: return "provider-qianwen-office"
-        case .deepSeekHarness: return "provider-deepseek-harness"
-        default: return nil
-        }
+        imageCache.setObject(image, forKey: cacheKey)
+        return image
     }
 }
 

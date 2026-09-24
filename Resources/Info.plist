@@ -10,6 +10,8 @@
 	<string>AIUsageBar</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.local.aiusagebar</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon.icns</string>
 	<key>CFBundleName</key>
 	<string>AI Usage Bar</string>
 	<key>CFBundlePackageType</key>

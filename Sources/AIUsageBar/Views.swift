@@ -34,7 +34,8 @@ struct MenuBarLabel: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: "gauge.medium")
+            BrandPulseMark(monochrome: true)
+                .frame(width: 18, height: 18)
             if let percent = store.criticalPercent {
                 Text("\(percent)%")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -349,9 +350,22 @@ struct AccountSettingsView: View {
     @StateObject private var launchAtLogin = LaunchAtLoginSettings()
     @ObservedObject private var languageSettings = AppLanguageSettings.shared
     @ObservedObject private var edgeDockSettings = EdgeDockExpansionSettings.shared
+    @AppStorage("aiUsageBar.dashboardAppearanceExpanded") private var appearanceExpanded = true
 
     var body: some View {
         Form {
+            Section {
+                DisclosureGroup(isExpanded: $appearanceExpanded) {
+                    DashboardAppearanceSettingsSection()
+                } label: {
+                    Label(
+                        AppearanceCopy.text(.title, language: languageSettings.language),
+                        systemImage: "paintpalette"
+                    )
+                    .font(.headline)
+                }
+            }
+
             Section {
                 Toggle(
                     isOn: Binding(
@@ -457,7 +471,7 @@ struct AccountSettingsView: View {
 
             Section {
                 Picker(selection: $store.provider) {
-                    ForEach(ProviderID.trackedCases) { provider in
+                    ForEach(ProviderID.manuallyConfigurableCases) { provider in
                         Text(provider.displayName).tag(provider)
                     }
                 } label: {
@@ -485,6 +499,16 @@ struct AccountSettingsView: View {
                 Text(L10n.text(.addServerAccount, language: languageSettings.language))
             } footer: {
                 Text(L10n.text(.credentialsFooter, language: languageSettings.language))
+            }
+
+            if !ProviderIconCatalog.configurableProviders.isEmpty {
+                Section {
+                    ProviderIconSettingsSection()
+                } header: {
+                    Text(L10n.text(.providerIcons, language: languageSettings.language))
+                } footer: {
+                    Text(L10n.text(.providerIconsHelp, language: languageSettings.language))
+                }
             }
 
             Section {

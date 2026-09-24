@@ -12,11 +12,16 @@ else
     SDK_PATH="${AIUSAGEBAR_SDK_PATH:-$(xcrun --sdk macosx --show-sdk-path)}"
     MODULE_CACHE_PATH="${AIUSAGEBAR_MODULE_CACHE_PATH:-$PROJECT_ROOT/.build-module-cache}"
     FALLBACK_BINARY="$PROJECT_ROOT/.build/AIUsageBar-direct"
+    SWIFT_EXTRA_OPTIONS=()
+    if [[ -n "${AIUSAGEBAR_INTERFACE_COMPILER_VERSION:-}" ]]; then
+        SWIFT_EXTRA_OPTIONS=(-interface-compiler-version "$AIUSAGEBAR_INTERFACE_COMPILER_VERSION")
+    fi
     mkdir -p "$MODULE_CACHE_PATH"
     swiftc \
         -target arm64-apple-macosx13.0 \
         -sdk "$SDK_PATH" \
         -module-cache-path "$MODULE_CACHE_PATH" \
+        "${SWIFT_EXTRA_OPTIONS[@]}" \
         -parse-as-library \
         Sources/AIUsageBar/*.swift \
         -o "$FALLBACK_BINARY"
@@ -35,6 +40,9 @@ STAGED_APP="$STAGING_ROOT/AIUsageBar.app"
 mkdir -p "$STAGED_APP/Contents/MacOS" "$STAGED_APP/Contents/Resources"
 cp "$BUILD_BINARY" "$STAGED_APP/Contents/MacOS/AIUsageBar"
 cp "$PROJECT_ROOT/Resources/Info.plist" "$STAGED_APP/Contents/Info.plist"
+if [[ -f "$PROJECT_ROOT/Resources/AppIcon.icns" ]]; then
+    cp "$PROJECT_ROOT/Resources/AppIcon.icns" "$STAGED_APP/Contents/Resources/AppIcon.icns"
+fi
 if [[ -f "$PROJECT_ROOT/Resources/pricing.json" ]]; then
     cp "$PROJECT_ROOT/Resources/pricing.json" "$STAGED_APP/Contents/Resources/pricing.json"
 fi

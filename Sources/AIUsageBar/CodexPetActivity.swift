@@ -34,6 +34,7 @@ struct CodexPetTaskActivity: Identifiable, Hashable, Sendable {
     let model: String?
     let reasoningEffort: String?
     let isSubagent: Bool
+    let subagentName: String?
     let action: CodexPetTaskAction?
     let startedAt: Date
     let updatedAt: Date
@@ -72,9 +73,8 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
     // a matching terminal record.  Require a fresh rollout event instead of
     // keeping that row visible for the full lifetime of the old log file.
     private let runningActivityWindow: TimeInterval = 5 * 60
-    // A historical turn_aborted record is not proof that the conversation is
-    // still blocked. Keep only recent blocked events eligible for the live
-    // pet state; the full rollout history remains untouched.
+    // An abnormal abort is only eligible for the live blocked state briefly;
+    // an explicitly interrupted turn is removed as a normal stop below.
     private let blockedActivityWindow: TimeInterval = 30 * 60
     private let maximumFiles = 12
     private let bootstrapTailBytes = 512 * 1024
@@ -224,6 +224,7 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
             var reasoningEffort: String?
             var sessionID: String?
             var isSubagent = false
+            var subagentName: String?
         }
         struct MutableActivity {
             var state: CodexPetTaskState
@@ -243,6 +244,7 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
             sessionContext.model = Self.modelName(in: payload)
             sessionContext.reasoningEffort = Self.reasoningEffort(in: payload)
             sessionContext.isSubagent = Self.isSubagent(in: payload)
+            sessionContext.subagentName = Self.subagentName(in: payload)
         }
         var contexts: [String: TurnContext] = [:]
         let fileSessionID = sessionContext.sessionID
@@ -259,7 +261,8 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                             model: activity.model,
                             reasoningEffort: activity.reasoningEffort,
                             sessionID: activity.sessionID ?? fileSessionID,
-                            isSubagent: activity.isSubagent
+                            isSubagent: activity.isSubagent,
+                            subagentName: activity.subagentName
                         ),
                         action: activity.action
                     )
@@ -292,6 +295,7 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                         ?? task.context.reasoningEffort
                     task.context.sessionID = context.sessionID ?? task.context.sessionID
                     task.context.isSubagent = task.context.isSubagent || context.isSubagent
+                    task.context.subagentName = context.subagentName ?? task.context.subagentName
                 }
                 tasks[id] = task
             } else {
@@ -319,6 +323,8 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                 sessionContext.reasoningEffort = Self.reasoningEffort(in: payload)
                     ?? sessionContext.reasoningEffort
                 sessionContext.isSubagent = Self.isSubagent(in: payload) || sessionContext.isSubagent
+                sessionContext.subagentName = Self.subagentName(in: payload)
+                    ?? sessionContext.subagentName
                 continue
             }
 
@@ -332,7 +338,8 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                     sessionID: LocalData.string(payload["session_id"])
                         ?? LocalData.string(payload["sessionId"])
                         ?? sessionContext.sessionID,
-                    isSubagent: Self.isSubagent(in: payload) || sessionContext.isSubagent
+                    isSubagent: Self.isSubagent(in: payload) || sessionContext.isSubagent,
+                    subagentName: Self.subagentName(in: payload) ?? sessionContext.subagentName
                 )
                 contexts[turnID] = context
                 currentTurnID = turnID
@@ -409,6 +416,7 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                 ?? LocalData.string(payload["sessionId"])
                 ?? context.sessionID
             context.isSubagent = Self.isSubagent(in: payload) || context.isSubagent
+            context.subagentName = Self.subagentName(in: payload) ?? context.subagentName
             contexts[turnID] = context
             // The rollout path plus turn ID stays stable even when the tail
             // no longer includes the early session_meta record.
@@ -449,13 +457,17 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                     currentTurnID = nil
                 }
             case "turn_aborted":
-                tasks[id] = MutableActivity(
-                    state: .blocked,
-                    startedAt: existing?.startedAt ?? timestamp,
-                    updatedAt: timestamp,
-                    context: existing?.context ?? context,
-                    action: existing?.action
-                )
+                if Self.isIntentionalStop(payload) {
+                    tasks.removeValue(forKey: id)
+                } else {
+                    tasks[id] = MutableActivity(
+                        state: .blocked,
+                        startedAt: existing?.startedAt ?? timestamp,
+                        updatedAt: timestamp,
+                        context: existing?.context ?? context,
+                        action: existing?.action
+                    )
+                }
                 if currentTurnID == turnID {
                     currentTurnID = nil
                 }
@@ -474,6 +486,7 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
                 model: task.context.model,
                 reasoningEffort: task.context.reasoningEffort,
                 isSubagent: task.context.isSubagent,
+                subagentName: task.context.subagentName,
                 action: task.action,
                 startedAt: task.startedAt,
                 updatedAt: task.updatedAt
@@ -481,6 +494,15 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
             },
             currentTurnID: currentTurnID
         )
+    }
+
+    private static func isIntentionalStop(_ payload: [String: Any]) -> Bool {
+        guard let rawReason = LocalData.string(payload["reason"]) else { return false }
+        let reason = normalized(rawReason.trimmingCharacters(in: .whitespacesAndNewlines))
+        return [
+            "interrupted", "user_interrupted", "user_cancelled", "user_canceled",
+            "cancelled", "canceled", "stopped"
+        ].contains(reason)
     }
 
     private static func modelName(in object: [String: Any]) -> String? {
@@ -513,6 +535,39 @@ final class CodexPetActivityMonitor: @unchecked Sendable {
         }
         let source = object["source"] as? [String: Any]
         return source?["subagent"] != nil || object["subagent"] != nil
+    }
+
+    private static func subagentName(in object: [String: Any]) -> String? {
+        let source = object["source"] as? [String: Any]
+        let subagent = source?["subagent"] as? [String: Any]
+            ?? object["subagent"] as? [String: Any]
+        let spawn = subagent?["thread_spawn"] as? [String: Any]
+        let containers = [object, spawn, subagent].compactMap { $0 }
+
+        for container in containers {
+            for key in [
+                "agent_nickname", "agentNickname", "subagent_name", "subagentName",
+                "agent_name", "agentName", "task_name", "taskName"
+            ] {
+                if let name = LocalData.string(container[key])?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+                    return name
+                }
+            }
+        }
+        for container in [spawn, subagent].compactMap({ $0 }) {
+            if let name = LocalData.string(container["name"])?
+                .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+                return name
+            }
+        }
+        for container in containers {
+            let path = LocalData.string(container["agent_path"] ?? container["agentPath"])
+            if let leaf = path?.split(separator: "/").last, leaf != "root" {
+                return String(leaf)
+            }
+        }
+        return nil
     }
 
     private static func firstString(

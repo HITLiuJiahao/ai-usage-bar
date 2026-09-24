@@ -287,7 +287,8 @@ struct DesktopPetFloatingView: View {
 
     private var petSize: CGFloat { CGFloat(store.preferences.petSize) }
     private var showsBubble: Bool {
-        store.preferences.showMessages && (hovering || store.mood != .idle || !store.activeSessions.isEmpty)
+        store.preferences.showMessages
+            && (store.ownerGreeting != nil || hovering || store.mood != .idle || !store.activeSessions.isEmpty)
     }
 
     var body: some View {
@@ -337,16 +338,24 @@ struct DesktopPetFloatingView: View {
         .accessibilityElement(children: .contain)
     }
 
+    private var travelingEdge: DesktopPetScreenEdge? {
+        switch store.animationPhase {
+        case .arriving(let edge), .running(let edge): return edge
+        default: return nil
+        }
+    }
+
     private var runningEdge: DesktopPetScreenEdge? {
         guard case let .running(edge) = store.animationPhase else { return nil }
         return edge
     }
 
     private var animatedPet: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: runningEdge == nil || reduceMotion)) { context in
-            let gait = runningEdge == nil || reduceMotion
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: travelingEdge == nil || reduceMotion)) { context in
+            let gait = travelingEdge == nil || reduceMotion
                 ? 0
-                : sin(context.date.timeIntervalSinceReferenceDate * 17)
+                : sin(context.date.timeIntervalSinceReferenceDate * (runningEdge == nil ? 12 : 17))
+                    * (runningEdge == nil ? 0.55 : 1)
             let bounce = CGFloat(abs(gait))
 
             ZStack {
@@ -363,8 +372,8 @@ struct DesktopPetFloatingView: View {
                         y: petScale.height + bounce * 0.045,
                         anchor: .bottom
                     )
-                    .rotationEffect(.degrees(petRotation + waveRotation + gait * 4), anchor: .bottom)
-                    .offset(x: petOffset.width, y: petOffset.height - bounce * 4)
+                    .rotationEffect(.degrees(petRotation + waveRotation + gait * 3), anchor: .bottom)
+                    .offset(x: petOffset.width, y: petOffset.height - bounce * 3.5)
                     .opacity(petOpacity)
                     .animation(petAnimation, value: store.animationPhase)
                     .allowsHitTesting(store.animationPhase == .idle)
@@ -401,7 +410,7 @@ struct DesktopPetFloatingView: View {
     private var petRotation: Double {
         switch store.animationPhase {
         case .arriving(let edge):
-            return edge == .left ? -5 : edge == .right ? 5 : 0
+            return edge == .left ? 5 : edge == .right ? -5 : 0
         case .landing:
             return 0
         case .waving:
@@ -455,13 +464,13 @@ struct DesktopPetFloatingView: View {
         }
         switch store.animationPhase {
         case .arriving:
-            return .easeOut(duration: 0.18)
+            return .easeOut(duration: 0.22)
         case .landing:
-            return .spring(response: 0.28, dampingFraction: 0.43)
+            return .spring(response: 0.26, dampingFraction: 0.58)
         case .waving:
             return .easeInOut(duration: 0.16)
         case .running:
-            return .easeIn(duration: 1.04)
+            return .easeIn(duration: 0.22)
         case .recovering:
             return .spring(response: 0.36, dampingFraction: 0.72)
         case .fadingIn, .fadingOut:
@@ -477,16 +486,20 @@ struct DesktopPetFloatingView: View {
 
     private var farewellMood: DesktopPetMood {
         switch store.animationPhase {
-        case .waving, .running:
+        case .waving:
             return .celebrating
+        case .arriving, .landing, .running:
+            return .resting
         default:
             return store.mood
         }
     }
 
-    private var isRunningLeft: Bool {
-        if case .running(.left) = store.animationPhase { return true }
-        return false
+    private var isFacingLeft: Bool {
+        switch store.animationPhase {
+        case .arriving(.right), .running(.left): return true
+        default: return false
+        }
     }
 
     private func trailAnchorOffset(for edge: DesktopPetScreenEdge) -> CGSize {
@@ -500,7 +513,10 @@ struct DesktopPetFloatingView: View {
 
     @ViewBuilder
     private var bubbleBody: some View {
-        if store.activeSessions.isEmpty {
+        if let greeting = store.ownerGreeting {
+            PetSpeechBubble(text: PetText.ownerGreeting(greeting))
+                .allowsHitTesting(false)
+        } else if store.activeSessions.isEmpty {
             PetSpeechBubble(text: store.speech)
                 .allowsHitTesting(false)
         } else {
@@ -515,7 +531,7 @@ struct DesktopPetFloatingView: View {
                 mood: farewellMood,
                 size: petSize
             )
-            .scaleEffect(x: isRunningLeft ? -1 : 1, y: 1)
+            .scaleEffect(x: isFacingLeft ? -1 : 1, y: 1)
             if store.animationPhase == .idle, store.mood == .working {
                 Image(systemName: "sparkle")
                     .font(.system(size: 14, weight: .bold))
@@ -553,7 +569,10 @@ struct DesktopPetFloatingView: View {
                 onDragStateChanged: { dragging in
                     isDragging = dragging
                 },
-                onHoverChanged: { hovering = $0 }
+                onHoverChanged: { isHovering in
+                    hovering = isHovering
+                    if isHovering { store.greetOwnerOnHoverIfNeeded() }
+                }
             )
             .frame(width: petSize, height: petSize)
         }
@@ -1108,18 +1127,27 @@ private struct PetAgentSessionRow: View {
     }
 
     private var subagentBadge: some View {
-        HStack(spacing: 3) {
+        let role = PetUI.text("子智能体", "Subagent", "サブエージェント", "하위 에이전트")
+        let name = session.subagentName?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = name.flatMap { $0.isEmpty ? nil : $0 } ?? role
+        let description = label == role ? role : "\(role): \(label)"
+
+        return HStack(spacing: 3) {
             Image(systemName: "person.2.fill")
                 .font(.system(size: compact ? 8 : 9, weight: .semibold))
-            Text(PetUI.text("子智能体", "Subagent", "サブエージェント", "하위 에이전트"))
+            Text(label)
                 .font(.system(size: compact ? 9 : 10, weight: .semibold, design: .rounded))
                 .lineLimit(1)
+                .truncationMode(.middle)
         }
         .foregroundStyle(Color.purple.opacity(0.95))
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
         .background(Color.purple.opacity(0.11), in: Capsule())
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(description)
+        .help(description)
     }
 
     private func metadataChip(value: String, systemImage: String, tint: Color? = nil) -> some View {

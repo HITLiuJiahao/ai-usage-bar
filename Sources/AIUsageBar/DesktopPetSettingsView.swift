@@ -126,6 +126,19 @@ struct DesktopPetSettingsSection: View {
                 PetUI.text("显示状态气泡", "Show status bubbles"),
                 isOn: boolBinding(get: { pet.preferences.showMessages }, set: pet.setShowMessages)
             )
+            HStack(spacing: 10) {
+                Button {
+                    pet.previewOwnerGreeting(.morning)
+                } label: {
+                    Label(PetText.previewGreetingLabel(.morning), systemImage: "sunrise")
+                }
+                Button {
+                    pet.previewOwnerGreeting(.lateNight)
+                } label: {
+                    Label(PetText.previewGreetingLabel(.lateNight), systemImage: "moon.stars")
+                }
+            }
+            .disabled(!pet.preferences.isEnabled || !pet.preferences.showMessages || pet.animationPhase.isLeaving)
             Toggle(
                 PetUI.text("任务完成或等待时通知我", "Notify when an agent finishes or waits"),
                 isOn: boolBinding(get: { pet.preferences.notificationsEnabled }, set: pet.setNotificationsEnabled)
